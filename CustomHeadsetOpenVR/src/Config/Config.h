@@ -302,22 +302,87 @@ struct GalaxyXrConfig{
 	// effective at the next SteamVR start / headset connect.
 	std::string streamQuality = "default";
 	// uniform scale for the controller render models. the official assets
-	// measure ~124x63mm while the physical controller tapes ~145x70mm, so a
-	// correction around 1.10-1.15 may fit better. applied to the WHOLE model
-	// system, not just meshes: the driver generates a scaled variant folder
-	// (geometry, component origins, motion pivots/centers and translation
-	// vectors; direction vectors and angles untouched) and swaps to it live
-	// via the render-model name-change reload. 1.0 uses the stock assets.
-	double renderModelScale = 1.0;
+	// measure ~124x63mm while the physical controller tapes ~145x70mm.
+	// 2026-08-24 field default 1.16: SteamVR Home mesh overlays the shell
+	// in passthrough. scales the MESH system only: geometry, mesh-bearing
+	// component origins, motion pivots/centers and translation vectors.
+	// pose anchors (tip, grip family, base, hand_anchor) are real-metre
+	// physical points and are never scaled; the skeleton and game hand
+	// meshes never see this value. the driver generates a variant folder
+	// and swaps to it live via the render-model name-change reload.
+	double renderModelScale = 1.16;
 	// apply the fixed raw->grip convention shift to the controller poses
-	// (rotate X +22deg, translate +5cm local Z): vrlink's raw pose is
-	// aim-convention while games' default binding paths attach at raw
-	// expecting a Touch/grip-convention frame. the shift is a driver
-	// constant, not a user offset - the GUI pose offsets stay personal
-	// trim on top. the grip-family render model components are rebased by
-	// the inverse so pose-selecting bindings land on the same physical
-	// points as before. escape hatch only; leave on.
+	// (rotate X +22deg, translate +5cm local Z). what it actually is, per
+	// the 2026-08-24 audit against Game Link's profile: vrlink's raw is
+	// Oculus Touch RING convention (Samsung ships the Touch component set
+	// verbatim; grip sits 9.7cm down the handle). the shift moves raw to
+	// a Valve Index-style origin, and with the knuckles remap (the game is
+	// told it talks to an Index) Index-correct titles line up on raw with
+	// no per-game work: SteamVR Home mesh, Blade & Sorcery, A Fisherman's
+	// Tale. the identity experiment "be a Touch instead" (gripConvention
+	// off + simulateTouch, Samsung's own frame) was worse in every title
+	// tested (2026-08-24 test B). named pose components are written by the
+	// generator from the official values rebased through the inverse of
+	// this shift (see officialComponents). the GUI pose offsets are
+	// personal trim on top. escape hatch only; leave on.
 	bool gripConvention = true;
+	// hand_anchor pose component: a driver-tunable pose used ONLY by our
+	// per-app default bindings (UE4 titles whose hand mesh is authored
+	// for a different controller's raw frame, e.g. The Wizards - Dark
+	// Times). raw/handgrip/openxr_grip stay identity for everything else.
+	// authored for the LEFT hand in the render model frame (cm, and deg in
+	// SteamVR's component rotate_xyz convention); X, yaw and roll
+	// are mirrored for the right hand. live: changing a value regenerates
+	// the render model variant and SteamVR reloads it on the name change.
+	double handAnchorXCm = 0.0;
+	double handAnchorYCm = 0.0;
+	double handAnchorZCm = 0.0;
+	double handAnchorPitchDeg = 0.0;
+	double handAnchorYawDeg = 0.0;
+	double handAnchorRollDeg = 0.0;
+	// controller mesh counter-translation (cm, left-hand authored, X
+	// mirrored). the shell mesh was authored on vrlink's tracking origin,
+	// so any raw-pose trim that fixes in-game hands (e.g. -2cm Z, 2026-08-24)
+	// drags the SteamVR Home mesh off the physical controller. this shifts
+	// every mesh-bearing render model component the other way (unscaled,
+	// real cm) without touching any pose. live: regenerates the variant.
+	// official pose components (2026-08-24 audit against Game Link's
+	// vst_controller_*.json): Samsung ships the Oculus Touch component set
+	// verbatim (openxr_grip z=0.098/20.6deg, handgrip=grip z=0.097/5.0deg,
+	// tip -37.4deg, openxr_aim -39.4deg, base z=0.149). those are physical
+	// points measured against vrlink's raw. our raw is vrlink raw with
+	// gripConvention applied, so the generator writes the official values
+	// REBASED through the inverse convention: every named pose path
+	// (dashboard laser via tip, OpenXR grip/aim, handgrip bindings) lands
+	// on the same physical point it does under Game Link. the shared /
+	// per-hand trims are treated as vrlink error correction and are NOT
+	// folded in. false = use the base json values as authored.
+	bool officialComponents = true;
+	// controller identity experiment (2026-08-24): when true the driver
+	// adds an oculus_touch layout (priority 95, above knuckles) to the
+	// shipped remapping json at startup so Touch-authored game bindings
+	// auto-remap with Touch simulation; when false the layout is removed
+	// and knuckles remains the fallback. the remapping file is read by
+	// SteamVR at startup: changing this needs a SteamVR restart.
+	bool simulateTouch = false;
+	// aim-family measured correction. 2026-08-24 test A: with the official
+	// tip rebased, the dashboard pointer emanated ~1cm forward and ~1cm
+	// above the physical tip (Samsung's tip is the Touch ring-front value
+	// on a ringless shell). Y -1 / Z +1 field-ratified the same day.
+	// applied to tip and openxr_aim together (same physical feature)
+	// after the rebase, in our raw frame, cm, X mirrored for the right.
+	double aimTrimXCm = 0.0;
+	double aimTrimYCm = -1.0;
+	double aimTrimZCm = 1.0;
+	// fold the shared (mirrored) and per-hand pose trims into the official
+	// component rebase, so trimming where the HAND sits does not drag the
+	// physical points (tip, base, grip) along with raw. translation is
+	// folded exactly; rotation is folded as yaw only (small, and exact
+	// folding would need SteamVR's rotate_xyz euler order).
+	bool componentRebaseIncludeTrim = true;
+	double meshOffsetXCm = 0.0;
+	double meshOffsetYCm = 0.0;
+	double meshOffsetZCm = 0.0;
 	// skeletal-hand offset (cm), applied in the driver-input tap to the
 	// wrist bone of vrlink's skeleton: moves the skeletal hand relative to
 	// its anchor WITHOUT touching the device pose, render model, or the
@@ -804,7 +869,12 @@ struct StreamFrameConfig{
 	// it through the runtime's ~10ms extrapolation (a few degrees at
 	// most). second-order for such games, first-order for vecVelocity
 	// games.
-	double kalmanDirLeadMs = 5.0;
+	// 2026-08-24: default 0. the Td=5 ratification was scored while
+	// vecAngularVelocity was reported in the wrong (world) frame, so the
+	// derotation was largely compensating vrserver's mis-predicted
+	// orientation. with kalmanAngularOutFrame=body, a nonzero Td made
+	// throw directions erratic in the field. keep 0 unless re-ratified.
+	double kalmanDirLeadMs = 0.0;
 	// adaptive direction lead (2026-08-15, tail experiment A): the fixed
 	// Td is tuned for the median throw, but the release-tail autopsy
 	// shows every genuine residual (12-24deg) is a maximum-violence
@@ -936,6 +1006,24 @@ struct StreamFrameConfig{
 	// symptom this kills: hand parked ~1m away but still rotating with
 	// the wrist for ~0.5s, then teleporting back.
 	bool kalmanPosFreeze3dof = true;
+	// frame of the REPORTED vecAngularVelocity (and vecAngularAcceleration).
+	// the openvr header never states it; the kalman state w is world /
+	// driver-frame (integration is dq (x) q) and linear velocity IS world
+	// (throw directions prove it). FIELD 2026-08-24: vrserver's photon-time
+	// prediction treats the angular vector as BODY-frame - reporting world
+	// made a horizontal sword swing pitch up at peak |w| (~15deg at 10rad/s
+	// x 25ms prediction); body fixed it, horizontal swings correct since.
+	// 0 = world (pre-fix behaviour), 1 = body (q^-1 w q), 2 = zero (the
+	// discriminator that found it). live reloaded.
+	int kalmanAngularOutFrame = 1;
+	// knob B: coordinated-turn coast during position-only freezes. while
+	// the tracker feeds frozen positions with a live quaternion, the
+	// linear state is predicted along its own v/a (a straight line
+	// tangent to the swing). with this on, v and a are rotated by the
+	// live angular velocity each step (exp(w dt)), so the coasted hand
+	// follows the arc the wrist is tracing. scale 1.0 = full coupling,
+	// 0 = off (default: not needed once the angular frame was fixed).
+	double kalmanFreezeCoastTurn = 0.0;
 	// velocity decay time constant during position-only freezes (ms).
 	// short freezes coast (throws unaffected), long occlusions glide to
 	// a stop instead of sailing on the occlusion-entry velocity and
@@ -1063,6 +1151,12 @@ struct StreamFrameConfig{
 	//    game that reads vecVelocity (relOut/rawPk 0.87-0.97 at 5-7deg)
 	//    and the wrong one for pose-history games (0.80-0.91, +latency).
 	double kalmanCaJerk = 4.0;
+	// Ja NOTE 2026-08-24: every Ja/O ratification above was scored while
+	// vecAngularVelocity was reported in the wrong (world) frame, a setup
+	// that rewards a laggier w because vrserver rotated about the wrong
+	// axis by |w|*dt. with the frame fixed the felt optimum has probably
+	// moved toward snappier. 1500 kept until re-swept (1500/3000/6000 on
+	// the B&S horizontal swing: attached at the peak, no overshoot on stop).
 	double kalmanCaAngJerk = 1500.0;
 	// CA-full measurement noise, separate from the CV knobs so tuning
 	// one mode never disturbs the other's field-proven values.
@@ -1085,6 +1179,7 @@ struct StreamFrameConfig{
 	// pose-history games fit — PEAKDIAG does not score that channel.
 	// 2026-08-16: 1.5 ratified alongside the honest linear noise.
 	// 2026-08-17: same rule as P — fixed sensor noise; Ja/O is the knob.
+	// 2026-08-24: see the Ja note - ratified under the wrong w frame.
 	double kalmanCaOriNoiseDeg = 1.5;
 	// shared acceleration decay time constant (CA-full, both channels).
 	// 2026-08-16: 20ms ratified (with exactCov the low-tau covariance is
@@ -1212,6 +1307,15 @@ struct ControllersConfig{
 	double rotationOffsetDeg[3] = {0, 0, 0};
 	double positionOffsetCm[3] = {0, 0, 0};
 	#endif
+	// per-hand residual trims (2026-08-24): vrlink's left and right raw
+	// origins are not exact mirror images (field: left yaw off, left
+	// translated slightly right, with only a Z trim active). these are
+	// applied UNMIRRORED, per hand, after the shared (mirrored) offsets
+	// above. same axis conventions as the shared offsets. live reloaded.
+	double leftRotationOffsetDeg[3] = {0, 0, 0};
+	double leftPositionOffsetCm[3] = {0, 0, 0};
+	double rightRotationOffsetDeg[3] = {0, 0, 0};
+	double rightPositionOffsetCm[3] = {0, 0, 0};
 	ControllerAlignerConfig aligner = {};
 };
 

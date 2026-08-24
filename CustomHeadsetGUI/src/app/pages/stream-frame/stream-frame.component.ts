@@ -9,7 +9,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { DriverSettingService } from '../../services/driver-setting.service';
 import { DriverInfoService } from '../../services/driver-info.service';
-import { Settings, StreamFrameConfig, ControllersConfig, GalaxyXrConfig } from '../../services/JsonFileDefines';
+import { Settings, StreamFrameConfig, ControllersConfig, GalaxyXrConfig, HandOffsets } from '../../services/JsonFileDefines';
 import { vendor } from '../../../environment';
 import { FieldTipComponent } from '../../utilities/field-tip/field-tip.component';
 import { ResetButtonComponent } from '../../utilities/reset-button/reset-button.component';
@@ -93,7 +93,7 @@ function defaultStreamFrame(): StreamFrameConfig {
     kalmanReleaseRewindMs: 0,
     kalmanRewindHoldMs: 100,
     kalmanDirSmoothMs: 0,
-    kalmanDirLeadMs: 5,
+    kalmanDirLeadMs: 0,
     kalmanDirLeadAdaptive: false,
     kalmanDirLeadBaseMs: 5,
     kalmanDirLeadWMs: 0.3,
@@ -109,6 +109,8 @@ function defaultStreamFrame(): StreamFrameConfig {
     kalmanDupRScale: 3,
     kalmanDeviceTime: true,
     kalmanPosFreeze3dof: true,
+    kalmanAngularOutFrame: 'body',
+    kalmanFreezeCoastTurn: 0,
     kalmanPosFreezeVelDecayMs: 0,
     kalmanDupCoastMaxMs: 90,
     kalmanGazeAssist: 0,
@@ -140,6 +142,13 @@ function defaultStreamFrame(): StreamFrameConfig {
 
 // fill missing fields without touching set ones, so older settings files and
 // files written before this page existed load into a complete object
+function zeroHandOffsets(): HandOffsets {
+  return {
+    rotationOffsetDeg: { x: 0, y: 0, z: 0 },
+    positionOffsetCm: { x: 0, y: 0, z: 0 },
+  };
+}
+
 function defaultControllers(): ControllersConfig {
   // vendor builds ship the passthrough-measured asymmetric pose residual
   // (mirrored per hand); must match the driver's Config.h vendor defaults
@@ -148,6 +157,8 @@ function defaultControllers(): ControllersConfig {
       rotationOffsetDeg: { x: 0, y: 5, z: 0 },
       positionOffsetCm: { x: 0.5, y: 0, z: 0 },
       mirrorOffsetsForRightHand: true,
+      left: zeroHandOffsets(),
+      right: zeroHandOffsets(),
       aligner: { enable: false },
     };
   }
@@ -155,6 +166,8 @@ function defaultControllers(): ControllersConfig {
     rotationOffsetDeg: { x: 0, y: 0, z: 0 },
     positionOffsetCm: { x: 0, y: 0, z: 0 },
     mirrorOffsetsForRightHand: false,
+    left: zeroHandOffsets(),
+    right: zeroHandOffsets(),
     aligner: { enable: false },
   };
 }
@@ -268,6 +281,13 @@ export class StreamFrameComponent {
         if (this.controllerSettings && this.controllerSettings.mirrorOffsetsForRightHand === undefined) {
           this.controllerSettings.mirrorOffsetsForRightHand = false;
         }
+        if (this.controllerSettings) {
+          for (const hand of ['left', 'right'] as const) {
+            if (!this.controllerSettings[hand]) {
+              this.controllerSettings[hand] = zeroHandOffsets();
+            }
+          }
+        }
         this.settings = this.rootSetting.streamFrame;
         this.matrixText.set((this.settings?.srgbMatrix ?? []).join(', '));
         const bands = this.settings?.distortion?.tune?.bands;
@@ -294,6 +314,19 @@ export class StreamFrameComponent {
     if (!cs.enable || !cs.enableForOther) return false;
     if (sf.skipColorWhileDashboardOpen) return false;
     return (cs as any).saturation !== 50 || cs.contrast !== 50;
+  }
+
+  handOffsetsDirty(hand: 'left' | 'right'): boolean {
+    const h = this.controllerSettings?.[hand];
+    if (!h) return false;
+    return ['x', 'y', 'z'].some(a => (h.rotationOffsetDeg as any)[a] !== 0 || (h.positionOffsetCm as any)[a] !== 0);
+  }
+
+  resetHandOffsets(hand: 'left' | 'right') {
+    if (this.controllerSettings) {
+      this.controllerSettings[hand] = zeroHandOffsets();
+      this.save();
+    }
   }
 
   resetControllers(group: keyof ControllersConfig) {
@@ -344,7 +377,7 @@ export class StreamFrameComponent {
   get galaxyXr(): GalaxyXrConfig {
     if (this.rootSetting) {
       if (!this.rootSetting.galaxyXr) {
-        this.rootSetting.galaxyXr = { nativeIdentity: false, nativeInputProfile: false, nativeResolution: true, streamQuality: 'default', renderModelScale: 1.0 };
+        this.rootSetting.galaxyXr = { nativeIdentity: false, nativeInputProfile: false, nativeResolution: true, streamQuality: 'default', renderModelScale: 1.16 };
       }
       if (this.rootSetting.galaxyXr.nativeResolution === undefined) {
         this.rootSetting.galaxyXr.nativeResolution = true;
@@ -353,7 +386,7 @@ export class StreamFrameComponent {
         this.rootSetting.galaxyXr.streamQuality = 'default';
       }
       if (this.rootSetting.galaxyXr.renderModelScale === undefined) {
-        this.rootSetting.galaxyXr.renderModelScale = 1.0;
+        this.rootSetting.galaxyXr.renderModelScale = 1.16;
       }
       if (this.rootSetting.galaxyXr.skeletonOffsetXCm === undefined) {
         this.rootSetting.galaxyXr.skeletonOffsetXCm = 0.0;
@@ -363,6 +396,51 @@ export class StreamFrameComponent {
       }
       if (this.rootSetting.galaxyXr.skeletonOffsetZCm === undefined) {
         this.rootSetting.galaxyXr.skeletonOffsetZCm = 0.0;
+      }
+      if (this.rootSetting.galaxyXr.handAnchorXCm === undefined) {
+        this.rootSetting.galaxyXr.handAnchorXCm = 0.0;
+      }
+      if (this.rootSetting.galaxyXr.handAnchorYCm === undefined) {
+        this.rootSetting.galaxyXr.handAnchorYCm = 0.0;
+      }
+      if (this.rootSetting.galaxyXr.handAnchorZCm === undefined) {
+        this.rootSetting.galaxyXr.handAnchorZCm = 0.0;
+      }
+      if (this.rootSetting.galaxyXr.handAnchorPitchDeg === undefined) {
+        this.rootSetting.galaxyXr.handAnchorPitchDeg = 0.0;
+      }
+      if (this.rootSetting.galaxyXr.handAnchorYawDeg === undefined) {
+        this.rootSetting.galaxyXr.handAnchorYawDeg = 0.0;
+      }
+      if (this.rootSetting.galaxyXr.handAnchorRollDeg === undefined) {
+        this.rootSetting.galaxyXr.handAnchorRollDeg = 0.0;
+      }
+      if (this.rootSetting.galaxyXr.meshOffsetXCm === undefined) {
+        this.rootSetting.galaxyXr.meshOffsetXCm = 0.0;
+      }
+      if (this.rootSetting.galaxyXr.meshOffsetYCm === undefined) {
+        this.rootSetting.galaxyXr.meshOffsetYCm = 0.0;
+      }
+      if (this.rootSetting.galaxyXr.meshOffsetZCm === undefined) {
+        this.rootSetting.galaxyXr.meshOffsetZCm = 0.0;
+      }
+      if (this.rootSetting.galaxyXr.officialComponents === undefined) {
+        this.rootSetting.galaxyXr.officialComponents = true;
+      }
+      if (this.rootSetting.galaxyXr.simulateTouch === undefined) {
+        this.rootSetting.galaxyXr.simulateTouch = false;
+      }
+      if (this.rootSetting.galaxyXr.aimTrimXCm === undefined) {
+        this.rootSetting.galaxyXr.aimTrimXCm = 0.0;
+      }
+      if (this.rootSetting.galaxyXr.aimTrimYCm === undefined) {
+        this.rootSetting.galaxyXr.aimTrimYCm = -1.0;
+      }
+      if (this.rootSetting.galaxyXr.aimTrimZCm === undefined) {
+        this.rootSetting.galaxyXr.aimTrimZCm = 1.0;
+      }
+      if (this.rootSetting.galaxyXr.componentRebaseIncludeTrim === undefined) {
+        this.rootSetting.galaxyXr.componentRebaseIncludeTrim = true;
       }
       return this.rootSetting.galaxyXr;
     }

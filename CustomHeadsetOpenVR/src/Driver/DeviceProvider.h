@@ -297,6 +297,7 @@ private:
 		double reacqPrevStepV[3] = {};
 		bool reacqHavePrevStepV = false;
 		int gazeBends = 0;
+		int turnCoastSteps = 0; // coordinated-turn coast steps this diag window
 		double gazeBendSum = 0;
 		double gazeBendMax = 0;
 		// velocity history ring for the release-rewind experiment: ~260ms

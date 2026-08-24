@@ -1051,8 +1051,9 @@ bool CustomHeadsetDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr:
 	// fixed raw->grip convention shift for the Galaxy XR controllers (see
 	// GalaxyXrConfig::gripConvention): applied before the user's personal
 	// trim offsets so those keep meaning small corrections. the grip-family
-	// render model components are rebased by the inverse of exactly this
-	// transform - keep the two in sync.
+	// render model components (handgrip/openxr_grip/grip) are identity so
+	// every pose path resolves to this same frame - do not re-add a grip
+	// offset there.
 	if(driverConfig.galaxyXr.gripConvention && openVRID != vr::k_unTrackedDeviceIndex_Hmd
 			&& GetDeviceClass(openVRID) == (int)vr::TrackedDeviceClass_Controller){
 		static const double kGripConventionRotDeg[3] = {22, 0, 0};
@@ -1132,6 +1133,42 @@ bool CustomHeadsetDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr:
 				DriverLog("Aligner: working offsets APPLYING to device id=%u (rot %.1f,%.1f,%.1f deg pos %.2f,%.2f,%.2f cm)",
 					openVRID, rotationOffsetDeg[0], rotationOffsetDeg[1], rotationOffsetDeg[2],
 					positionOffsetCm[0], positionOffsetCm[1], positionOffsetCm[2]);
+			}
+		}
+	}
+	// per-hand unmirrored trims (ControllersConfig::left*/right*): applied
+	// after the shared mirrored offsets, same local-frame convention.
+	if(openVRID != vr::k_unTrackedDeviceIndex_Hmd
+			&& GetDeviceClass(openVRID) == (int)vr::TrackedDeviceClass_Controller){
+		int hand = -1;
+		{
+			std::lock_guard<std::mutex> handGuard(poseLogLock);
+			auto handFound = openVRIDHand.find(openVRID);
+			if(handFound != openVRIDHand.end()){
+				hand = handFound->second;
+			}
+		}
+		const double* handRot = nullptr;
+		const double* handPos = nullptr;
+		if(hand == 0){
+			handRot = driverConfig.controllers.leftRotationOffsetDeg;
+			handPos = driverConfig.controllers.leftPositionOffsetCm;
+		}else if(hand == 1){
+			handRot = driverConfig.controllers.rightRotationOffsetDeg;
+			handPos = driverConfig.controllers.rightPositionOffsetCm;
+		}
+		if(handRot && handPos){
+			if(handPos[0] != 0 || handPos[1] != 0 || handPos[2] != 0){
+				double local[3] = {handPos[0] / 100.0, handPos[1] / 100.0, handPos[2] / 100.0};
+				double world[3];
+				QuatRotateVector(pose.qRotation, local, world);
+				pose.vecPosition[0] += world[0];
+				pose.vecPosition[1] += world[1];
+				pose.vecPosition[2] += world[2];
+			}
+			if(handRot[0] != 0 || handRot[1] != 0 || handRot[2] != 0){
+				double rot[3] = {handRot[0], handRot[1], handRot[2]};
+				pose.qRotation = QuatMultiply(pose.qRotation, QuatFromEulerDeg(rot));
 			}
 		}
 	}
@@ -1435,6 +1472,7 @@ bool CustomHeadsetDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr:
 			int diagDup = 0;
 			int diagP3d = 0;
 			int diagBends = 0;
+			int diagTurnSteps = 0;
 			double diagBendMean = 0;
 			double diagBendMax = 0;
 			int diagDtBack = 0;
@@ -2313,6 +2351,35 @@ bool CustomHeadsetDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr:
 				// the constant-acceleration (Singer) estimator in the
 				// CA-full experiment mode. same R, same dup/teleport
 				// machinery — only the motion model changes.
+				// coordinated-turn coast (kalmanFreezeCoastTurn): while the
+				// tracker feeds a frozen position with a live quaternion,
+				// rotate the linear v/a by the live angular velocity before
+				// predicting, so the coasted hand follows the swing's arc
+				// instead of its tangent. the per-axis covariances are left
+				// alone (they are already inflating through the run).
+				{
+					double turnK = driverConfig.streamFrame.kalmanFreezeCoastTurn;
+					if(linearMeasurementMissing && turnK > 0.0 && dt > 0.0){
+						if(turnK > 1.0){ turnK = 1.0; }
+						double ht = 0.5 * dt * turnK;
+						vr::HmdQuaternion_t dqt = {1.0, ks.w[0] * ht, ks.w[1] * ht, ks.w[2] * ht};
+						double nq = sqrt(dqt.w * dqt.w + dqt.x * dqt.x + dqt.y * dqt.y + dqt.z * dqt.z);
+						if(nq > 1e-9){
+							dqt.w /= nq; dqt.x /= nq; dqt.y /= nq; dqt.z /= nq;
+							double vIn[3] = {ks.v[0], ks.v[1], ks.v[2]};
+							double vRot[3];
+							QuatRotateVector(dqt, vIn, vRot);
+							ks.v[0] = vRot[0]; ks.v[1] = vRot[1]; ks.v[2] = vRot[2];
+							if(caFull){
+								double aIn[3] = {ks.ca[0], ks.ca[1], ks.ca[2]};
+								double aRot[3];
+								QuatRotateVector(dqt, aIn, aRot);
+								ks.ca[0] = aRot[0]; ks.ca[1] = aRot[1]; ks.ca[2] = aRot[2];
+							}
+							ks.turnCoastSteps++;
+						}
+					}
+				}
 				double caBeta = exp(-dt / caTau);
 				double nisAccum = 0;
 				double nisBaseAccum = 0;
@@ -3248,6 +3315,32 @@ bool CustomHeadsetDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr:
 					pose.qRotation = ks.q;
 				}
 			}
+			// reported angular velocity frame (kalmanAngularOutFrame):
+			// 0 world (state as-is), 1 body (q^-1 w q using the pose
+			// actually reported), 2 zero. ks.repW stays world-frame so
+			// the KALSPACE/KALVSRC diagnostics keep their meaning.
+			{
+				int wFrame = driverConfig.streamFrame.kalmanAngularOutFrame;
+				if(wFrame == 2){
+					pose.vecAngularVelocity[0] = 0; pose.vecAngularVelocity[1] = 0; pose.vecAngularVelocity[2] = 0;
+					pose.vecAngularAcceleration[0] = 0; pose.vecAngularAcceleration[1] = 0; pose.vecAngularAcceleration[2] = 0;
+				}else if(wFrame == 1){
+					vr::HmdQuaternion_t qInv = pose.qRotation;
+					qInv.x = -qInv.x; qInv.y = -qInv.y; qInv.z = -qInv.z;
+					double wIn[3] = {pose.vecAngularVelocity[0], pose.vecAngularVelocity[1], pose.vecAngularVelocity[2]};
+					double wB[3];
+					QuatRotateVector(qInv, wIn, wB);
+					pose.vecAngularVelocity[0] = wB[0]; pose.vecAngularVelocity[1] = wB[1]; pose.vecAngularVelocity[2] = wB[2];
+					// angular acceleration (only nonzero with kalmanCaReportAccel)
+					// lives in the same frame as angular velocity
+					double aIn[3] = {pose.vecAngularAcceleration[0], pose.vecAngularAcceleration[1], pose.vecAngularAcceleration[2]};
+					if(aIn[0] != 0 || aIn[1] != 0 || aIn[2] != 0){
+						double aB[3];
+						QuatRotateVector(qInv, aIn, aB);
+						pose.vecAngularAcceleration[0] = aB[0]; pose.vecAngularAcceleration[1] = aB[1]; pose.vecAngularAcceleration[2] = aB[2];
+					}
+				}
+			}
 
 			// Epoch contract:
 			//   ks.p/q are estimates at the accepted measurement epoch tMeas.
@@ -3326,7 +3419,9 @@ bool CustomHeadsetDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr:
 					+ driverConfig.streamFrame.kalmanAdaptiveRMaxDiv * 0.013
 					+ (caExactCov ? 0.0017 : 0)
 					+ (driverConfig.streamFrame.kalmanPosFreeze3dof ? 0.00073 : 0)
-					+ driverConfig.streamFrame.kalmanPosFreezeVelDecayMs * 0.000031;
+					+ driverConfig.streamFrame.kalmanPosFreezeVelDecayMs * 0.000031
+					+ driverConfig.streamFrame.kalmanAngularOutFrame * 0.00091
+					+ driverConfig.streamFrame.kalmanFreezeCoastTurn * 0.00013;
 				// grip sig: cm-scale terms would vanish below the CA sig's
 				// epsilon floor (~1e-2 next to its 1e13-scale terms)
 				double sigGrip = (gripEnable ? 1000.0 : 0.0) + gripBlend * 100.0
@@ -3384,6 +3479,8 @@ bool CustomHeadsetDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr:
 				ks.stepFrozen = 0;
 				ks.dupSkipped = 0;
 				ks.posFreeze3dof = 0;
+				diagTurnSteps = ks.turnCoastSteps;
+				ks.turnCoastSteps = 0;
 				ks.gazeBends = 0;
 				ks.gazeBendSum = 0;
 				ks.gazeBendMax = 0;
@@ -3430,6 +3527,10 @@ bool CustomHeadsetDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr:
 				driverConfig.streamFrame.kalmanDeviceTime ? 1 : 0,
 				driverConfig.streamFrame.kalmanDupCoastMaxMs,
 				driverConfig.streamFrame.poseLogging ? 1 : 0, (int)driverConfig.streamFrame.kalmanPosFreeze3dof);
+			DriverLog("VelocityFix: SWORDARC knobs id=%u angularOutFrame=%s freezeCoastTurn=%.2f",
+				openVRID,
+				driverConfig.streamFrame.kalmanAngularOutFrame == 1 ? "body" : (driverConfig.streamFrame.kalmanAngularOutFrame == 2 ? "zero" : "world"),
+				driverConfig.streamFrame.kalmanFreezeCoastTurn);
 			if(driverConfig.streamFrame.kalmanDirLeadAdaptive || driverConfig.streamFrame.kalmanAdaptiveR){
 				DriverLog("VelocityFix: ADAPT dirLeadAdaptive=%d base=%.1fms slope=%.2fms/rads adaptR=%d maxDiv=%.0f",
 					driverConfig.streamFrame.kalmanDirLeadAdaptive ? 1 : 0,
@@ -3505,12 +3606,13 @@ bool CustomHeadsetDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr:
 			if(logKalDiag){
 				// tuning guide: NIS ~ 1 means the noise models match
 				// reality; sustained > 3 = too stiff; < 0.3 = too loose
-				DriverLog("PoseLog: KALDIAG id=%u nis=%.2f aNis=%.2f stepMax=%.1fmm frozenSteps=%d dupSkipped=%d dtBack=%d dtMean=%.2fms dtMax=%.1fms fdtMean=%.2fms fdtMax=%.1fms coastMax=%.0fms gazeBends=%d bendMean=%.1fdeg bendMax=%.1fdeg accMax=%.2f wAccMax=%.1f accNZ=%d loss=%d lossMs=%.0f tp=%d caAcc=%.1f caWAcc=%.1f garbage=%d vClamp=%d rDiv=%.1f rADiv=%.1f p3d=%d rts=%d/%d rtsDepth=%.1f", openVRID, diagNis, diagANis, diagStepMax * 1000.0, diagFrozen, diagDup, diagDtBack, diagDtMean, diagDtMax, diagFdtMean, diagFdtMax, diagCoastMax, diagBends, diagBendMean, diagBendMax, diagAccMax, diagWAccMax, diagAccNZ, diagLossRuns, diagLossMs, diagTeleports, diagCaAcc, diagCaWAcc, diagGarbage, diagVClamp, diagRDiv, diagRADiv, diagP3d, diagRtsFrames, diagRtsRep, diagRtsDepth);
-				DriverLog("PoseLog: KALEPOCH id=%u fresh=%d tMeas=%.6f offIn=%.2fms offOut=%.2fms raw=(%.4f,%.4f,%.4f) stateP=(%.4f,%.4f,%.4f) submitP=(%.4f,%.4f,%.4f) stateV=(%.3f,%.3f,%.3f) stateA=(%.1f,%.1f,%.1f) sigP=%.2fmm sigV=%.3fm/s sigA=%.1fm/s2 dirYaw=%s%.2fdeg",
+				DriverLog("PoseLog: KALDIAG id=%u nis=%.2f aNis=%.2f stepMax=%.1fmm frozenSteps=%d dupSkipped=%d dtBack=%d dtMean=%.2fms dtMax=%.1fms fdtMean=%.2fms fdtMax=%.1fms coastMax=%.0fms gazeBends=%d bendMean=%.1fdeg bendMax=%.1fdeg accMax=%.2f wAccMax=%.1f accNZ=%d loss=%d lossMs=%.0f tp=%d caAcc=%.1f caWAcc=%.1f garbage=%d vClamp=%d rDiv=%.1f rADiv=%.1f p3d=%d rts=%d/%d rtsDepth=%.1f turn=%d", openVRID, diagNis, diagANis, diagStepMax * 1000.0, diagFrozen, diagDup, diagDtBack, diagDtMean, diagDtMax, diagFdtMean, diagFdtMax, diagCoastMax, diagBends, diagBendMean, diagBendMax, diagAccMax, diagWAccMax, diagAccNZ, diagLossRuns, diagLossMs, diagTeleports, diagCaAcc, diagCaWAcc, diagGarbage, diagVClamp, diagRDiv, diagRADiv, diagP3d, diagRtsFrames, diagRtsRep, diagRtsDepth, diagTurnSteps);
+				DriverLog("PoseLog: KALEPOCH id=%u fresh=%d tMeas=%.6f offIn=%.2fms offOut=%.2fms raw=(%.4f,%.4f,%.4f) stateP=(%.4f,%.4f,%.4f) submitP=(%.4f,%.4f,%.4f) submitQ=(%.5f,%.5f,%.5f,%.5f) stateV=(%.3f,%.3f,%.3f) stateA=(%.1f,%.1f,%.1f) sigP=%.2fmm sigV=%.3fm/s sigA=%.1fm/s2 dirYaw=%s%.2fdeg",
 					openVRID, diagFresh, diagTMeas, diagOffsetIn * 1000.0, diagOffsetOut * 1000.0,
 					diagRawPos[0], diagRawPos[1], diagRawPos[2],
 					diagStateP[0], diagStateP[1], diagStateP[2],
 					diagSubmitP[0], diagSubmitP[1], diagSubmitP[2],
+					pose.qRotation.w, pose.qRotation.x, pose.qRotation.y, pose.qRotation.z,
 					diagStateV[0], diagStateV[1], diagStateV[2],
 					diagStateA[0], diagStateA[1], diagStateA[2],
 					diagPosSigma * 1000.0, diagVelSigma, diagAccSigma,

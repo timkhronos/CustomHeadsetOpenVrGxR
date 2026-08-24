@@ -34,12 +34,33 @@ export type GalaxyXrConfig = {
   skeletonOffsetYCm?: number,
   skeletonOffsetZCm?: number,
   skeletonOffsetMirror?: boolean,
+  handAnchorXCm?: number,
+  handAnchorYCm?: number,
+  handAnchorZCm?: number,
+  handAnchorPitchDeg?: number,
+  handAnchorYawDeg?: number,
+  handAnchorRollDeg?: number,
+  meshOffsetXCm?: number,
+  meshOffsetYCm?: number,
+  meshOffsetZCm?: number,
+  officialComponents?: boolean,
+  simulateTouch?: boolean,
+  aimTrimXCm?: number,
+  aimTrimYCm?: number,
+  aimTrimZCm?: number,
+  componentRebaseIncludeTrim?: boolean,
 }
 export type ControllersConfig = {
   mirrorOffsetsForRightHand?: boolean,
   rotationOffsetDeg: { x: number, y: number, z: number },
   positionOffsetCm: { x: number, y: number, z: number },
+  left?: HandOffsets,
+  right?: HandOffsets,
   aligner: { enable: boolean },
+}
+export type HandOffsets = {
+  rotationOffsetDeg: { x: number, y: number, z: number },
+  positionOffsetCm: { x: number, y: number, z: number },
 }
 export type StationaryDimmingConfig = {
   enable: boolean,
@@ -216,6 +237,8 @@ export type StreamFrameConfig = {
   graveyardEnable: boolean;
   kalmanDeviceTime: boolean;
   kalmanPosFreeze3dof: boolean;
+  kalmanAngularOutFrame?: string;
+  kalmanFreezeCoastTurn?: number;
   kalmanPosFreezeVelDecayMs: number;
   kalmanDupCoastMaxMs: number;
   kalmanGazeAssist: number;

@@ -398,6 +398,51 @@ void ConfigLoader::ParseConfig(){
 			if(galaxyXrData["gripConvention"].is_boolean()){
 				newConfig.galaxyXr.gripConvention = galaxyXrData["gripConvention"].get<bool>();
 			}
+			if(galaxyXrData["handAnchorXCm"].is_number()){
+				newConfig.galaxyXr.handAnchorXCm = galaxyXrData["handAnchorXCm"].get<double>();
+			}
+			if(galaxyXrData["handAnchorYCm"].is_number()){
+				newConfig.galaxyXr.handAnchorYCm = galaxyXrData["handAnchorYCm"].get<double>();
+			}
+			if(galaxyXrData["handAnchorZCm"].is_number()){
+				newConfig.galaxyXr.handAnchorZCm = galaxyXrData["handAnchorZCm"].get<double>();
+			}
+			if(galaxyXrData["handAnchorPitchDeg"].is_number()){
+				newConfig.galaxyXr.handAnchorPitchDeg = galaxyXrData["handAnchorPitchDeg"].get<double>();
+			}
+			if(galaxyXrData["handAnchorYawDeg"].is_number()){
+				newConfig.galaxyXr.handAnchorYawDeg = galaxyXrData["handAnchorYawDeg"].get<double>();
+			}
+			if(galaxyXrData["handAnchorRollDeg"].is_number()){
+				newConfig.galaxyXr.handAnchorRollDeg = galaxyXrData["handAnchorRollDeg"].get<double>();
+			}
+			if(galaxyXrData["simulateTouch"].is_boolean()){
+				newConfig.galaxyXr.simulateTouch = galaxyXrData["simulateTouch"].get<bool>();
+			}
+			if(galaxyXrData["aimTrimXCm"].is_number()){
+				newConfig.galaxyXr.aimTrimXCm = galaxyXrData["aimTrimXCm"].get<double>();
+			}
+			if(galaxyXrData["aimTrimYCm"].is_number()){
+				newConfig.galaxyXr.aimTrimYCm = galaxyXrData["aimTrimYCm"].get<double>();
+			}
+			if(galaxyXrData["aimTrimZCm"].is_number()){
+				newConfig.galaxyXr.aimTrimZCm = galaxyXrData["aimTrimZCm"].get<double>();
+			}
+			if(galaxyXrData["componentRebaseIncludeTrim"].is_boolean()){
+				newConfig.galaxyXr.componentRebaseIncludeTrim = galaxyXrData["componentRebaseIncludeTrim"].get<bool>();
+			}
+			if(galaxyXrData["officialComponents"].is_boolean()){
+				newConfig.galaxyXr.officialComponents = galaxyXrData["officialComponents"].get<bool>();
+			}
+			if(galaxyXrData["meshOffsetXCm"].is_number()){
+				newConfig.galaxyXr.meshOffsetXCm = galaxyXrData["meshOffsetXCm"].get<double>();
+			}
+			if(galaxyXrData["meshOffsetYCm"].is_number()){
+				newConfig.galaxyXr.meshOffsetYCm = galaxyXrData["meshOffsetYCm"].get<double>();
+			}
+			if(galaxyXrData["meshOffsetZCm"].is_number()){
+				newConfig.galaxyXr.meshOffsetZCm = galaxyXrData["meshOffsetZCm"].get<double>();
+			}
 			if(galaxyXrData["skeletonOffsetXCm"].is_number()){
 				newConfig.galaxyXr.skeletonOffsetXCm = galaxyXrData["skeletonOffsetXCm"].get<double>();
 			}
@@ -935,6 +980,15 @@ void ConfigLoader::ParseConfig(){
 			if(streamFrameData["kalmanPosFreeze3dof"].is_boolean()){
 				newConfig.streamFrame.kalmanPosFreeze3dof = streamFrameData["kalmanPosFreeze3dof"].get<bool>();
 			}
+			if(streamFrameData["kalmanAngularOutFrame"].is_number()){
+				newConfig.streamFrame.kalmanAngularOutFrame = streamFrameData["kalmanAngularOutFrame"].get<int>();
+			}else if(streamFrameData["kalmanAngularOutFrame"].is_string()){
+				std::string f = streamFrameData["kalmanAngularOutFrame"].get<std::string>();
+				newConfig.streamFrame.kalmanAngularOutFrame = f == "world" ? 0 : (f == "zero" ? 2 : 1);
+			}
+			if(streamFrameData["kalmanFreezeCoastTurn"].is_number()){
+				newConfig.streamFrame.kalmanFreezeCoastTurn = streamFrameData["kalmanFreezeCoastTurn"].get<double>();
+			}
 			if(streamFrameData["kalmanPosFreezeVelDecayMs"].is_number()){
 				newConfig.streamFrame.kalmanPosFreezeVelDecayMs = streamFrameData["kalmanPosFreezeVelDecayMs"].get<double>();
 			}
@@ -1118,6 +1172,26 @@ void ConfigLoader::ParseConfig(){
 				for(int i = 0; i < 3; i++){
 					if(controllersData["positionOffsetCm"][axes[i]].is_number()){
 						newConfig.controllers.positionOffsetCm[i] = controllersData["positionOffsetCm"][axes[i]].get<double>();
+					}
+				}
+			}
+			// per-hand unmirrored trims: {"left": {"rotationOffsetDeg": {..}, "positionOffsetCm": {..}}, "right": {..}}
+			{
+				struct HandSlot{ const char* key; double* rot; double* pos; };
+				HandSlot slots[2] = {
+					{"left", newConfig.controllers.leftRotationOffsetDeg, newConfig.controllers.leftPositionOffsetCm},
+					{"right", newConfig.controllers.rightRotationOffsetDeg, newConfig.controllers.rightPositionOffsetCm},
+				};
+				for(HandSlot &slot : slots){
+					if(!controllersData[slot.key].is_object()){ continue; }
+					json handData = controllersData[slot.key];
+					for(int i = 0; i < 3; i++){
+						if(handData["rotationOffsetDeg"].is_object() && handData["rotationOffsetDeg"][axes[i]].is_number()){
+							slot.rot[i] = handData["rotationOffsetDeg"][axes[i]].get<double>();
+						}
+						if(handData["positionOffsetCm"].is_object() && handData["positionOffsetCm"][axes[i]].is_number()){
+							slot.pos[i] = handData["positionOffsetCm"][axes[i]].get<double>();
+						}
 					}
 				}
 			}
@@ -1391,6 +1465,14 @@ void ConfigLoader::WriteInfo(){
 					{"y", defaultSettings.controllers.positionOffsetCm[1]},
 					{"z", defaultSettings.controllers.positionOffsetCm[2]},
 				}},
+				{"left", {
+					{"rotationOffsetDeg", {{"x", 0.0}, {"y", 0.0}, {"z", 0.0}}},
+					{"positionOffsetCm", {{"x", 0.0}, {"y", 0.0}, {"z", 0.0}}},
+				}},
+				{"right", {
+					{"rotationOffsetDeg", {{"x", 0.0}, {"y", 0.0}, {"z", 0.0}}},
+					{"positionOffsetCm", {{"x", 0.0}, {"y", 0.0}, {"z", 0.0}}},
+				}},
 				{"aligner", {{"enable", defaultSettings.controllers.aligner.enable}}},
 			}},
 			{"streamFrame", {
@@ -1549,6 +1631,8 @@ void ConfigLoader::WriteInfo(){
 				{"graveyardEnable", defaultSettings.streamFrame.graveyardEnable},
 				{"kalmanDeviceTime", defaultSettings.streamFrame.kalmanDeviceTime},
 				{"kalmanPosFreeze3dof", defaultSettings.streamFrame.kalmanPosFreeze3dof},
+				{"kalmanAngularOutFrame", defaultSettings.streamFrame.kalmanAngularOutFrame},
+				{"kalmanFreezeCoastTurn", defaultSettings.streamFrame.kalmanFreezeCoastTurn},
 				{"kalmanPosFreezeVelDecayMs", defaultSettings.streamFrame.kalmanPosFreezeVelDecayMs},
 				{"kalmanDupCoastMaxMs", defaultSettings.streamFrame.kalmanDupCoastMaxMs},
 				{"kalmanGazeAssist", defaultSettings.streamFrame.kalmanGazeAssist},

@@ -5,6 +5,9 @@
 #include <functional>
 #include <mutex>
 #include <cmath>
+#include <cstdio>
+#include <cstdint>
+#include <string>
 #include "nlohmann/json.hpp"
 
 // helper: set a string property only when it differs, returns true if written
@@ -252,11 +255,219 @@ void GalaxyXRControllerShim::PosTrackedDeviceActivate(uint32_t &unObjectId, vr::
 // pivot/center, press_translate) are multiplied; direction vectors (axis)
 // and angles (rotate_xyz, value_mapping, joystick ranges) are copied as-is;
 // all other files (mtl, textures) are copied verbatim.
-static bool GenerateScaledRenderModel(const std::string &srcDir, const std::string &dstDir, double scale, const std::string &srcJsonName, const std::string &dstJsonName){
+// GalaxyXrConfig::simulateTouch: add or remove the oculus_touch layout in
+// the shipped remapping json (in the driver's resource dir, so it survives
+// rebuilds as long as the flag is set). SteamVR reads the file at startup.
+static void SyncTouchLayout(){
+	static bool synced = false;
+	if(synced){ return; }
+	synced = true;
 	namespace fs = std::filesystem;
 	try{
+		std::string path = driverConfigLoader.info.driverResources + "/input/galaxy_xr_controller_remapping.json";
+		if(!fs::exists(path)){ return; }
+		nlohmann::json j;
+		{
+			std::ifstream in(path);
+			in >> j;
+		}
+		if(!j.contains("layouts") || !j["layouts"].is_array()){ return; }
+		nlohmann::json &layouts = j["layouts"];
+		int touchIndex = -1;
+		int knucklesIndex = -1;
+		for(int i = 0; i < (int)layouts.size(); i++){
+			std::string from = layouts[i].value("from_controller_type", "");
+			if(from == "oculus_touch"){ touchIndex = i; }
+			if(from == "knuckles"){ knucklesIndex = i; }
+		}
+		bool want = driverConfig.galaxyXr.simulateTouch;
+		bool changed = false;
+		if(want && touchIndex < 0){
+			nlohmann::json touch = {
+				{"priority", 95},
+				{"from_controller_type", "oculus_touch"},
+				{"simulate_controller_type", true},
+				{"simulate_render_model", true},
+				{"simulate_HMD", true},
+				{"autoremappings", nlohmann::json::array({
+					{{"from", "/user/hand/right/input/grip"}, {"to", "/user/hand/right/input/grip"}},
+					{{"from", "/user/hand/right/input/trigger"}, {"to", "/user/hand/right/input/trigger"}},
+					{{"from", "/user/hand/right/input/joystick"}, {"to", "/user/hand/right/input/joystick"}},
+					{{"from", "/user/hand/right/input/thumbrest"}, {"to", "/user/hand/right/input/thumbrest"}},
+					{{"from", "/user/hand/left/input/x"}, {"to", "/user/hand/left/input/x"}, {"mirror", false}},
+					{{"from", "/user/hand/left/input/y"}, {"to", "/user/hand/left/input/y"}, {"mirror", false}},
+					{{"from", "/user/hand/right/input/a"}, {"to", "/user/hand/right/input/a"}, {"mirror", false}},
+					{{"from", "/user/hand/right/input/b"}, {"to", "/user/hand/right/input/b"}, {"mirror", false}},
+					{{"from", "/user/hand/left/input/system"}, {"to", "/user/hand/left/input/system"}, {"mirror", false}},
+				})},
+			};
+			int insertAt = knucklesIndex >= 0 ? knucklesIndex : (int)layouts.size();
+			layouts.insert(layouts.begin() + insertAt, touch);
+			changed = true;
+		}else if(!want && touchIndex >= 0){
+			layouts.erase(layouts.begin() + touchIndex);
+			changed = true;
+		}
+		if(changed){
+			std::ofstream out(path, std::ios::trunc);
+			out << j.dump(2) << "\n";
+			DriverLog("GalaxyXRControllerShim: remapping oculus_touch layout %s (simulateTouch=%d; effective next SteamVR start)",
+				want ? "added" : "removed", want ? 1 : 0);
+		}
+	}catch(const std::exception &e){
+		DriverLog("GalaxyXRControllerShim: remapping sync failed: %s", e.what());
+	}
+}
+
+// hand_anchor values (see GalaxyXrConfig::handAnchor*) for one hand, in
+// render model units (metres / degrees), mirrored for the right hand
+struct HandAnchorLocal{
+	double origin[3];
+	double rotateXyz[3];
+};
+static HandAnchorLocal HandAnchorFor(bool isLeft){
+	const GalaxyXrConfig &g = driverConfig.galaxyXr;
+	double m = isLeft ? 1.0 : -1.0;
+	HandAnchorLocal a;
+	a.origin[0] = m * g.handAnchorXCm * 0.01;
+	a.origin[1] = g.handAnchorYCm * 0.01;
+	a.origin[2] = g.handAnchorZCm * 0.01;
+	a.rotateXyz[0] = g.handAnchorPitchDeg;
+	a.rotateXyz[1] = m * g.handAnchorYawDeg;
+	a.rotateXyz[2] = m * g.handAnchorRollDeg;
+	return a;
+}
+static bool HandAnchorIsIdentity(){
+	const GalaxyXrConfig &g = driverConfig.galaxyXr;
+	if(g.officialComponents){ return false; } // official set always needs a generated variant
+	return g.handAnchorXCm == 0.0 && g.handAnchorYCm == 0.0 && g.handAnchorZCm == 0.0
+		&& g.handAnchorPitchDeg == 0.0 && g.handAnchorYawDeg == 0.0 && g.handAnchorRollDeg == 0.0
+		&& g.meshOffsetXCm == 0.0 && g.meshOffsetYCm == 0.0 && g.meshOffsetZCm == 0.0;
+}
+// mesh counter-translation for one hand, metres, X mirrored for the right
+static void MeshOffsetFor(bool isLeft, double out[3]){
+	const GalaxyXrConfig &g = driverConfig.galaxyXr;
+	out[0] = (isLeft ? 1.0 : -1.0) * g.meshOffsetXCm * 0.01;
+	out[1] = g.meshOffsetYCm * 0.01;
+	out[2] = g.meshOffsetZCm * 0.01;
+}
+// Samsung's official pose components (left hand, metres / degrees), copied
+// from Game Link's vst_controller_left.json. all pure-X rotations except
+// base (yaw 180). right hand: X negated, yaw negated.
+struct OfficialComponent{
+	const char* name;
+	double origin[3];
+	double pitchDeg;
+	double yawDeg;
+};
+static const OfficialComponent kOfficialComponents[] = {
+	{"base",             {-0.0034,   -0.0034,     0.1491},    -0.4, 180.0},
+	{"tip",              { 0.011811, -0.030531,   0.020703},  -37.4,  0.0},
+	{"openxr_aim",       { 0.007,    -0.03894766, 0.00949694}, -39.4, 0.0},
+	{"openxr_grip",      { 0.007,    -0.000242,   0.098076},   20.6,  0.0},
+	{"openxr_handmodel", {-0.01125,  -0.00182941, 0.1019482}, -39.4,  0.0},
+	{"handgrip",         { 0.002469,  0.003,      0.097},       5.037, 0.0},
+	{"grip",             { 0.002469,  0.003,      0.097},       5.037, 0.0},
+};
+// must match DeviceProvider's gripConvention constants
+static const double kGripConventionPitchDeg = 22.0;
+static const double kGripConventionZ = 0.05;
+// rebase an official component (authored against vrlink raw) into our raw
+// frame: new = T^-1 * official, T = rotate X by 22deg then translate 5cm
+// along local Z. for the pure-X components the pitch simply drops by 22;
+// for base (yaw 180) the X rotation conjugates through the Y flip:
+// R_x(-22) R_y(180) R_x(-0.4) = R_x(-21.6) R_y(180), written assuming
+// rotate_xyz applies X before Y. if base shows up mirrored in pitch the
+// euler order is the other way and the sign flips (base is cosmetic).
+static void OfficialComponentFor(const OfficialComponent &c, bool isLeft, bool rebase, double outOrigin[3], double outRot[3]){
+	double m = isLeft ? 1.0 : -1.0;
+	double o[3] = {m * c.origin[0], c.origin[1], c.origin[2]};
+	double pitch = c.pitchDeg;
+	double yaw = m * c.yawDeg;
+	if(rebase){
+		double a = -kGripConventionPitchDeg * 3.14159265358979323846 / 180.0;
+		double ca = cos(a), sa = sin(a);
+		double d[3] = {o[0], o[1], o[2] - kGripConventionZ};
+		o[0] = d[0];
+		o[1] = ca * d[1] - sa * d[2];
+		o[2] = sa * d[1] + ca * d[2];
+		if(fabs(c.yawDeg) > 90.0){
+			pitch = -kGripConventionPitchDeg - c.pitchDeg;
+		}else{
+			pitch = c.pitchDeg - kGripConventionPitchDeg;
+		}
+	}
+	// fold the pose trims (applied to raw AFTER the convention): the
+	// physical points must stay put when the hand pose is trimmed
+	if(rebase && driverConfig.galaxyXr.componentRebaseIncludeTrim){
+		const ControllersConfig &cc = driverConfig.controllers;
+		double tPos[3] = {cc.positionOffsetCm[0], cc.positionOffsetCm[1], cc.positionOffsetCm[2]};
+		double tYaw = cc.rotationOffsetDeg[1];
+		if(!isLeft && cc.mirrorOffsetsForRightHand){ tPos[0] = -tPos[0]; tYaw = -tYaw; }
+		const double* hp = isLeft ? cc.leftPositionOffsetCm : cc.rightPositionOffsetCm;
+		const double* hr = isLeft ? cc.leftRotationOffsetDeg : cc.rightRotationOffsetDeg;
+		for(int i = 0; i < 3; i++){ tPos[i] = (tPos[i] + hp[i]) * 0.01; }
+		tYaw += hr[1];
+		// trim = translate t (local) then rotate R_y(yaw): comp' = R_y(-yaw) (comp - t)
+		double b = -tYaw * 3.14159265358979323846 / 180.0;
+		double cb = cos(b), sb = sin(b);
+		double d[3] = {o[0] - tPos[0], o[1] - tPos[1], o[2] - tPos[2]};
+		o[0] = cb * d[0] + sb * d[2];
+		o[1] = d[1];
+		o[2] = -sb * d[0] + cb * d[2];
+		yaw += -tYaw;
+	}
+	// aim-family measured correction
+	if(std::string(c.name) == "tip" || std::string(c.name) == "openxr_aim"){
+		o[0] += m * driverConfig.galaxyXr.aimTrimXCm * 0.01;
+		o[1] += driverConfig.galaxyXr.aimTrimYCm * 0.01;
+		o[2] += driverConfig.galaxyXr.aimTrimZCm * 0.01;
+	}
+	outOrigin[0] = o[0]; outOrigin[1] = o[1]; outOrigin[2] = o[2];
+	outRot[0] = pitch; outRot[1] = yaw; outRot[2] = 0.0;
+}
+
+// short stable tag of the anchor values for the variant folder name, so a
+// value change produces a NEW model name and SteamVR reloads it live
+static std::string HandAnchorTag(){
+	if(HandAnchorIsIdentity()){ return ""; }
+	const GalaxyXrConfig &g = driverConfig.galaxyXr;
+	char buf[512];
+	const ControllersConfig &cc = driverConfig.controllers;
+	snprintf(buf, sizeof(buf), "%.1f_%.1f_%.1f_%.1f_%.1f_%.1f_m%.1f_%.1f_%.1f_o%d_gc%d_a%.1f_%.1f_%.1f_t%d_%.1f_%.1f_%.1f_%.1f_%.1f_%.1f_%.1f_%.1f_%.1f_%.1f_%.1f_%.1f_%.1f",
+		g.handAnchorXCm, g.handAnchorYCm, g.handAnchorZCm,
+		g.handAnchorPitchDeg, g.handAnchorYawDeg, g.handAnchorRollDeg,
+		g.meshOffsetXCm, g.meshOffsetYCm, g.meshOffsetZCm,
+		g.officialComponents ? 1 : 0, g.gripConvention ? 1 : 0,
+		g.aimTrimXCm, g.aimTrimYCm, g.aimTrimZCm,
+		g.componentRebaseIncludeTrim ? 1 : 0,
+		cc.positionOffsetCm[0], cc.positionOffsetCm[1], cc.positionOffsetCm[2], cc.rotationOffsetDeg[1],
+		cc.leftPositionOffsetCm[0], cc.leftPositionOffsetCm[1], cc.leftPositionOffsetCm[2], cc.leftRotationOffsetDeg[1],
+		cc.rightPositionOffsetCm[0], cc.rightPositionOffsetCm[1], cc.rightPositionOffsetCm[2], cc.rightRotationOffsetDeg[1],
+		cc.mirrorOffsetsForRightHand ? 1.0 : 0.0);
+	std::string h = buf;
+	uint32_t x = 2166136261u;
+	for(char c : h){ x = (x ^ (uint8_t)c) * 16777619u; }
+	snprintf(buf, sizeof(buf), "_a%08x", x);
+	return buf;
+}
+
+static bool GenerateScaledRenderModel(const std::string &srcDir, const std::string &dstDir, double scale, const std::string &srcJsonName, const std::string &dstJsonName, const HandAnchorLocal *anchor, const double *meshOffset, bool isLeft){
+	namespace fs = std::filesystem;
+	try{
+		// regenerate when the source json is newer than the variant: the
+		// pose-anchor components (handgrip/openxr_grip/grip) are edited in
+		// the base asset, and a cached variant must not keep serving stale
+		// anchors after a rebuild
 		if(fs::exists(dstDir)){
-			return true;
+			fs::path dstJson = fs::path(dstDir) / dstJsonName;
+			fs::path srcJson = fs::path(srcDir) / srcJsonName;
+			if(fs::exists(dstJson) && fs::exists(srcJson)
+					&& fs::last_write_time(srcJson) <= fs::last_write_time(dstJson)){
+				return true;
+			}
+			DriverLog("GalaxyXRControllerShim: scaled render model %s is older than its source - regenerating", dstDir.c_str());
+			fs::remove_all(dstDir);
 		}
 		std::string tmpDir = dstDir + ".tmp";
 		fs::remove_all(tmpDir);
@@ -282,24 +493,75 @@ static bool GenerateScaledRenderModel(const std::string &srcDir, const std::stri
 			}else if(name == srcJsonName){
 				std::ifstream in(entry.path());
 				nlohmann::json j = nlohmann::json::parse(in, nullptr, true, true);
-				std::function<void(nlohmann::json&)> walk = [&](nlohmann::json &node){
+				// pose-anchor components (handgrip, openxr_grip, tip, aim, base:
+				// entries with no mesh "filename") describe physical points
+				// measured against the tracking origin in real metres; they are
+				// NOT scaled with the mesh. only mesh-bearing components carry
+				// their origins/pivots along with the geometry.
+				std::function<void(nlohmann::json&, bool)> walk = [&](nlohmann::json &node, bool poseAnchor){
 					if(node.is_object()){
 						for(auto &item : node.items()){
 							const std::string &key = item.key();
 							nlohmann::json &val = item.value();
+							if(key == "components" && val.is_object()){
+								for(auto &comp : val.items()){
+									bool anchor = comp.value().is_object() && !comp.value().contains("filename");
+									walk(comp.value(), anchor);
+								}
+								continue;
+							}
+							if(poseAnchor && key == "origin"){
+								continue;
+							}
 							if(val.is_array() && (key == "origin" || key == "pivot" || key == "center" || key == "press_translate")){
 								for(auto &n : val){
 									if(n.is_number()){ n = n.get<double>() * scale; }
 								}
 							}else{
-								walk(val);
+								walk(val, poseAnchor);
 							}
 						}
 					}else if(node.is_array()){
-						for(auto &child : node){ walk(child); }
+						for(auto &child : node){ walk(child, poseAnchor); }
 					}
 				};
-				walk(j);
+				walk(j, false);
+				// mesh counter-translation: shift every mesh-bearing component's
+				// origin (after scaling, real metres) so the visible shell moves
+				// without touching any pose anchor
+				if(meshOffset && (meshOffset[0] != 0 || meshOffset[1] != 0 || meshOffset[2] != 0)
+						&& j.contains("components") && j["components"].is_object()){
+					for(auto &comp : j["components"].items()){
+						nlohmann::json &c = comp.value();
+						if(!c.is_object() || !c.contains("filename")){ continue; }
+						nlohmann::json &local = c["component_local"];
+						if(!local.is_object()){ local = nlohmann::json::object(); }
+						nlohmann::json &origin = local["origin"];
+						if(!origin.is_array() || origin.size() != 3){ origin = {0.0, 0.0, 0.0}; }
+						for(int i = 0; i < 3; i++){
+							origin[i] = origin[i].get<double>() + meshOffset[i];
+						}
+					}
+				}
+				// official Samsung pose components, rebased into our raw frame
+				// (see GalaxyXrConfig::officialComponents). never scaled.
+				if(driverConfig.galaxyXr.officialComponents && j.contains("components") && j["components"].is_object()){
+					for(const OfficialComponent &c : kOfficialComponents){
+						double o[3], r[3];
+						OfficialComponentFor(c, isLeft, driverConfig.galaxyXr.gripConvention, o, r);
+						nlohmann::json &comp = j["components"][c.name];
+						comp["component_local"]["origin"] = {o[0], o[1], o[2]};
+						comp["component_local"]["rotate_xyz"] = {r[0], r[1], r[2]};
+					}
+					DriverLog("GalaxyXRControllerShim: official pose components written (%s, rebase=%d)",
+						isLeft ? "left" : "right", driverConfig.galaxyXr.gripConvention ? 1 : 0);
+				}
+				// hand_anchor: written from config (never scaled - real metres)
+				if(anchor && j.contains("components") && j["components"].is_object()){
+					nlohmann::json &comp = j["components"]["hand_anchor"];
+					comp["component_local"]["origin"] = {anchor->origin[0], anchor->origin[1], anchor->origin[2]};
+					comp["component_local"]["rotate_xyz"] = {anchor->rotateXyz[0], anchor->rotateXyz[1], anchor->rotateXyz[2]};
+				}
 				std::ofstream out(fs::path(tmpDir) / dstJsonName);
 				out << j.dump(1);
 			}else{
@@ -354,19 +616,27 @@ std::string GalaxyXRControllerShim::TargetModelName(){
 	// with geometry, component origins and motion pivots scaled together,
 	// and swap to it via the name-change reload. tuning variants win.
 	int scalePct = (int)std::lround(driverConfig.galaxyXr.renderModelScale * 100.0);
-	if(variant.empty() && scalePct != 100 && scalePct >= 50 && scalePct <= 200){
+	if(scalePct < 50 || scalePct > 200){ scalePct = 100; }
+	std::string anchorTag = HandAnchorTag();
+	// a generated variant is needed for a non-unit scale OR a non-identity
+	// hand_anchor; the folder name carries both so either change reloads
+	if(variant.empty() && (scalePct != 100 || !anchorTag.empty())){
 		std::string hand = isLeft ? "left" : "right";
-		std::string scaledBase = "vst_controller_s" + std::to_string(scalePct);
+		std::string scaledBase = "vst_controller_s" + std::to_string(scalePct) + anchorTag;
 		std::string rmDir = driverConfigLoader.info.driverResources + "/rendermodels";
 		static std::mutex genMutex;
 		std::lock_guard<std::mutex> lock(genMutex);
 		PurgeStaleScaledModels(rmDir, scaledBase);
+		HandAnchorLocal anchor = HandAnchorFor(isLeft);
+		double meshOffset[3];
+		MeshOffsetFor(isLeft, meshOffset);
 		bool ok = GenerateScaledRenderModel(
 			rmDir + "/vst_controller_" + hand,
 			rmDir + "/" + scaledBase + "_" + hand,
-			driverConfig.galaxyXr.renderModelScale,
+			scalePct / 100.0,
 			"vst_controller_" + hand + ".json",
-			scaledBase + "_" + hand + ".json");
+			scaledBase + "_" + hand + ".json",
+			&anchor, meshOffset, isLeft);
 		if(ok){
 			base = scaledBase;
 		}
@@ -386,11 +656,15 @@ void GalaxyXRControllerShim::ApplyIdentity(){
 		DriverLog("GalaxyXRControllerShim: rendermodel %s applied for %s", model.c_str(), serial.c_str());
 	}
 	if(driverConfig.galaxyXr.nativeInputProfile){
+		SyncTouchLayout();
 		// the official native input profile: controller type
 		// galaxy_xr_controller with Valve's own legacy bindings, remapping
-		// and pose components (handgrip at the official z=0.098m/20.6deg,
-		// which corrects held-item orientation at the proper layer instead
-		// of pose offsets). note: the official remapping has no
+		// and pose components. the grip-family components (handgrip,
+		// openxr_grip, grip) are IDENTITY in our render model json: the raw
+		// pose already carries the grip convention (gripConvention), so a
+		// binding that selects /pose/handgrip (UE4 per-app bindings) or the
+		// OpenXR grip pose lands on exactly the point SteamVR Home and
+		// /pose/raw bindings use. note: the official remapping has no
 		// oculus_touch layout, so user-made custom Touch bindings do not
 		// auto-carry; per-game rebinding may be needed.
 		std::string profile = "{" + driverConfigLoader.info.driverName + "}/input/galaxy_xr_controller_profile.json";

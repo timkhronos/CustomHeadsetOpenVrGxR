@@ -50,7 +50,7 @@
 <div class="field">
     <div class="title">
         <span i18n>Controller Model Size</span>
-        <app-field-tip info="Uniform scale for the controller models. The official assets measure about 124x63mm while the physical controller is about 145x70mm, so values around 1.10-1.17 may match reality better. Scales the whole model system together (geometry, animation pivots, grip/aim anchors), applied live within about a second. 1.0 = stock." />
+        <app-field-tip info="Uniform scale for the controller models. The official assets measure about 124x63mm while the physical controller is about 145x70mm; 1.16 (default) overlays the real shell in SteamVR Home. Scales the visible model only (geometry, button and stick pivots). Pose anchors, hand skeleton and game hand meshes are never scaled, so this cannot change hand size in games. Applied live within about a second. 1.0 = stock assets." />
     </div>
     <div class="control">
         <input type="number" min="0.5" max="2" step="0.01" [(ngModel)]="galaxyXr.renderModelScale" (ngModelChange)="save()" style="width: 90px;" />
@@ -81,6 +81,132 @@
     </div>
     <div class="control">
         <input type="number" min="-10" max="10" step="0.25" [(ngModel)]="galaxyXr.skeletonOffsetZCm" (ngModelChange)="save()" style="width: 90px;" />
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Official Pose Components</span>
+        <app-field-tip info="Use Samsung&#39;s official pose points (Game Link&#39;s render model: OpenXR grip/aim, dashboard laser tip, handgrip, base), rebased into our grip-convention frame so each named pose lands on the same physical spot as under Game Link. Only affects bindings that select a named pose (OpenXR games, the dashboard laser, /pose/handgrip bindings) - never raw, so SteamVR Home and raw-pose games are unaffected. Off = the render model json values as authored. Applies live." />
+    </div>
+    <div class="control">
+        <mat-slide-toggle [(ngModel)]="galaxyXr.officialComponents" (ngModelChange)="save()"></mat-slide-toggle>
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Pointer Tip Trim X (cm)</span>
+        <app-field-tip info="Measured correction of the dashboard pointer origin (tip and OpenXR aim together). Sideways; mirrored for the right hand. Applies live." />
+    </div>
+    <div class="control">
+        <input type="number" min="-5" max="5" step="0.25" [(ngModel)]="galaxyXr.aimTrimXCm" (ngModelChange)="save()" style="width: 90px;" />
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Pointer Tip Trim Y (cm)</span>
+        <app-field-tip info="Up/down correction of the pointer origin. If the pointer emanates 1 cm above the real tip, set -1." />
+    </div>
+    <div class="control">
+        <input type="number" min="-5" max="5" step="0.25" [(ngModel)]="galaxyXr.aimTrimYCm" (ngModelChange)="save()" style="width: 90px;" />
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Pointer Tip Trim Z (cm)</span>
+        <app-field-tip info="Along-the-controller correction of the pointer origin. Positive moves it back toward the wrist: if the pointer starts 1 cm beyond the real tip, set +1." />
+    </div>
+    <div class="control">
+        <input type="number" min="-5" max="5" step="0.25" [(ngModel)]="galaxyXr.aimTrimZCm" (ngModelChange)="save()" style="width: 90px;" />
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Experimental: Simulate Oculus Touch</span>
+        <app-field-tip info="Identity experiment. Adds an Oculus Touch layout above Valve Index in the controller remapping, so games that ship Touch bindings auto-remap with Touch simulation (the game applies its Touch hand offsets) instead of Index. Meant to be tested with gripConvention off in settings.json, since Samsung&#39;s raw pose is Touch-convention. Off = Index remains the fallback. Requires a SteamVR restart." />
+    </div>
+    <div class="control">
+        <mat-slide-toggle [(ngModel)]="galaxyXr.simulateTouch" (ngModelChange)="save()"></mat-slide-toggle>
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Controller Mesh Offset X (cm)</span>
+        <app-field-tip info="Cosmetic counter-translation of the visible controller model (SteamVR Home, dashboard) after a pose trim moved it off the physical controller. Moves ONLY the mesh - no pose, anchor or held-object pivot changes. Left-hand authored, X mirrored for the right. Applies live (model regenerates and reloads within a second)." />
+    </div>
+    <div class="control">
+        <input type="number" min="-10" max="10" step="0.25" [(ngModel)]="galaxyXr.meshOffsetXCm" (ngModelChange)="save()" style="width: 90px;" />
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Controller Mesh Offset Y (cm)</span>
+        <app-field-tip info="Second axis of the mesh counter-translation (up/down in the controller frame)." />
+    </div>
+    <div class="control">
+        <input type="number" min="-10" max="10" step="0.25" [(ngModel)]="galaxyXr.meshOffsetYCm" (ngModelChange)="save()" style="width: 90px;" />
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Controller Mesh Offset Z (cm)</span>
+        <app-field-tip info="Third axis of the mesh counter-translation. Positive moves the mesh back toward the wrist. If Position Offset Z is -2 for the hands, +2 here puts the Home mesh back on the real controller." />
+    </div>
+    <div class="control">
+        <input type="number" min="-10" max="10" step="0.25" [(ngModel)]="galaxyXr.meshOffsetZCm" (ngModelChange)="save()" style="width: 90px;" />
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Hand Anchor X (cm)</span>
+        <app-field-tip info="Transform of the /pose/hand_anchor component, used ONLY by per-app bindings that select it (identity = same as raw). Note: a per-app binding disables SteamVR controller-type simulation, so games lose their own per-controller hand offsets - prefer the knuckles fallback and the pose trims below unless a game has no usable offsets. Left-hand authored; X, yaw and roll mirror for the right. Live." />
+    </div>
+    <div class="control">
+        <input type="number" min="-20" max="20" step="0.25" [(ngModel)]="galaxyXr.handAnchorXCm" (ngModelChange)="save()" style="width: 90px;" />
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Hand Anchor Y (cm)</span>
+        <app-field-tip info="Second axis of the hand anchor translation." />
+    </div>
+    <div class="control">
+        <input type="number" min="-20" max="20" step="0.25" [(ngModel)]="galaxyXr.handAnchorYCm" (ngModelChange)="save()" style="width: 90px;" />
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Hand Anchor Z (cm)</span>
+        <app-field-tip info="Third axis of the hand anchor translation (negative = toward the fingertips)." />
+    </div>
+    <div class="control">
+        <input type="number" min="-20" max="20" step="0.25" [(ngModel)]="galaxyXr.handAnchorZCm" (ngModelChange)="save()" style="width: 90px;" />
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Hand Anchor Pitch (deg)</span>
+        <app-field-tip info="Hand anchor rotation about X, in the render model rotate_xyz convention." />
+    </div>
+    <div class="control">
+        <input type="number" min="-90" max="90" step="1" [(ngModel)]="galaxyXr.handAnchorPitchDeg" (ngModelChange)="save()" style="width: 90px;" />
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Hand Anchor Yaw (deg)</span>
+        <app-field-tip info="Hand anchor rotation about Y (mirrored for the right hand)." />
+    </div>
+    <div class="control">
+        <input type="number" min="-90" max="90" step="1" [(ngModel)]="galaxyXr.handAnchorYawDeg" (ngModelChange)="save()" style="width: 90px;" />
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Hand Anchor Roll (deg)</span>
+        <app-field-tip info="Hand anchor rotation about Z (mirrored for the right hand)." />
+    </div>
+    <div class="control">
+        <input type="number" min="-90" max="90" step="1" [(ngModel)]="galaxyXr.handAnchorRollDeg" (ngModelChange)="save()" style="width: 90px;" />
     </div>
 </div>
 <div class="field">
@@ -805,6 +931,30 @@
 @if(isKalmanMode()){
 <div class="field">
     <div class="title">
+        <span>Kalman Angular Velocity Frame</span>
+        <app-field-tip info="Frame the reported angular velocity is expressed in. Body (default, field-verified 2026-08-24): SteamVR&#39;s motion prediction rotates about controller-local axes, so this is what it expects. World: the previous behaviour, which made horizontal sword swings pitch up at the peak of the swing. Zero: diagnostic only - no angular prediction, laggier rotation." />
+        <app-reset-button [canReset]="settings.kalmanAngularOutFrame != defaults.kalmanAngularOutFrame" (resetClick)="reset('kalmanAngularOutFrame')"></app-reset-button>
+    </div>
+    <div class="control">
+        <mat-select [(ngModel)]="settings.kalmanAngularOutFrame" (ngModelChange)="save()">
+            <mat-option value="body">Body - controller-local (default)</mat-option>
+            <mat-option value="world">World - previous behaviour</mat-option>
+            <mat-option value="zero">Zero - diagnostic</mat-option>
+        </mat-select>
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Kalman Freeze Coast Turn</span>
+        <app-field-tip info="Experimental. While the tracker sends frozen positions with a live rotation (fast swings), bend the coasted hand path by the current angular velocity instead of coasting in a straight line. 0 = off (default), 1 = full coupling." />
+        <app-reset-button [canReset]="settings.kalmanFreezeCoastTurn != defaults.kalmanFreezeCoastTurn" (resetClick)="reset('kalmanFreezeCoastTurn')"></app-reset-button>
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="settings.kalmanFreezeCoastTurn" step="0.25" min="0" max="1" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+<div class="field">
+    <div class="title">
         <span>Kalman Direction Lead (ms)</span>
         <app-field-tip info="Fixes throws that combine arm movement WITH a wrist flick bending off target. Rotates the reported throw direction forward along your current wrist rotation by this many ms." />
         <app-reset-button [canReset]="settings.kalmanDirLeadMs != defaults.kalmanDirLeadMs" (resetClick)="reset('kalmanDirLeadMs')"></app-reset-button>
@@ -955,6 +1105,54 @@
         <mat-slide-toggle [(ngModel)]="controllerSettings.mirrorOffsetsForRightHand" (ngModelChange)="save()"></mat-slide-toggle>
     </div>
 </div>
+@if (controllerSettings.left && controllerSettings.right) {
+<div class="field">
+    <div class="title">
+        <span>Left Hand Rotation Offset (deg)</span>
+        <app-field-tip info="Per-hand trim applied UNMIRRORED to the left controller only, after the shared offsets above. Use when the two hands need different corrections (the tracked origins are not exact mirror images). X = pitch, Y = yaw, Z = roll. Live reloaded." />
+        <app-reset-button [canReset]="handOffsetsDirty('left')" (resetClick)="resetHandOffsets('left')"></app-reset-button>
+    </div>
+    <div class="control">
+        <span>X</span><input matInput [(ngModel)]="controllerSettings.left!.rotationOffsetDeg.x" step="1" (ngModelChange)="save()" type="number">
+        <span>Y</span><input matInput [(ngModel)]="controllerSettings.left!.rotationOffsetDeg.y" step="1" (ngModelChange)="save()" type="number">
+        <span>Z</span><input matInput [(ngModel)]="controllerSettings.left!.rotationOffsetDeg.z" step="1" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Left Hand Position Offset (cm)</span>
+        <app-field-tip info="Per-hand position trim for the left controller only, unmirrored, applied after the shared offsets. Same axes as the shared Position Offset: Z = along the controller, Y = up/down, X = sideways." />
+    </div>
+    <div class="control">
+        <span>X</span><input matInput [(ngModel)]="controllerSettings.left!.positionOffsetCm.x" step="0.5" (ngModelChange)="save()" type="number">
+        <span>Y</span><input matInput [(ngModel)]="controllerSettings.left!.positionOffsetCm.y" step="0.5" (ngModelChange)="save()" type="number">
+        <span>Z</span><input matInput [(ngModel)]="controllerSettings.left!.positionOffsetCm.z" step="0.5" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Right Hand Rotation Offset (deg)</span>
+        <app-field-tip info="Per-hand trim applied UNMIRRORED to the right controller only, after the shared offsets above. Use when the two hands need different corrections (the tracked origins are not exact mirror images). X = pitch, Y = yaw, Z = roll. Live reloaded." />
+        <app-reset-button [canReset]="handOffsetsDirty('right')" (resetClick)="resetHandOffsets('right')"></app-reset-button>
+    </div>
+    <div class="control">
+        <span>X</span><input matInput [(ngModel)]="controllerSettings.right!.rotationOffsetDeg.x" step="1" (ngModelChange)="save()" type="number">
+        <span>Y</span><input matInput [(ngModel)]="controllerSettings.right!.rotationOffsetDeg.y" step="1" (ngModelChange)="save()" type="number">
+        <span>Z</span><input matInput [(ngModel)]="controllerSettings.right!.rotationOffsetDeg.z" step="1" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Right Hand Position Offset (cm)</span>
+        <app-field-tip info="Per-hand position trim for the right controller only, unmirrored, applied after the shared offsets. Same axes as the shared Position Offset: Z = along the controller, Y = up/down, X = sideways." />
+    </div>
+    <div class="control">
+        <span>X</span><input matInput [(ngModel)]="controllerSettings.right!.positionOffsetCm.x" step="0.5" (ngModelChange)="save()" type="number">
+        <span>Y</span><input matInput [(ngModel)]="controllerSettings.right!.positionOffsetCm.y" step="0.5" (ngModelChange)="save()" type="number">
+        <span>Z</span><input matInput [(ngModel)]="controllerSettings.right!.positionOffsetCm.z" step="0.5" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+}
 }
 
 }
