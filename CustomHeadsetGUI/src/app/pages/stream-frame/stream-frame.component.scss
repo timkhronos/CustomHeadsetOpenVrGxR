@@ -93,3 +93,8 @@
     padding: 8px 14px;
     margin: 8px 0;
 }
+// nested collapsible depth (1.0.0 layout: A/B/C main sections, numbered sub-sections)
+.section-title.level-0 { font-size: 1.15em; margin-top: 0.9rem; }
+.section-title.level-1 { margin-left: 1rem; font-size: 1em; opacity: 0.95; }
+.section-title.level-2 { margin-left: 2rem; font-size: 0.95em; opacity: 0.9; }
+.section-title.level-3 { margin-left: 3rem; font-size: 0.9em; opacity: 0.85; }

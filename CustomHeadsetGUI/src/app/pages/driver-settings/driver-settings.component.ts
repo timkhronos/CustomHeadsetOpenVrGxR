@@ -15,6 +15,7 @@ import {SystemDiagnosticService} from '../../services/system-diagnostic.service'
 import {MatButtonModule} from '@angular/material/button'
 import { AppSettingService } from '../../services/app-setting.service';
 import { AppUpdateService } from '../../services/app-update.service'
+import { RouterLink } from '@angular/router';
 
 export interface TabConfig {
   type: string;
@@ -31,7 +32,8 @@ export interface TabConfig {
         MatTabsModule,
         MatIconModule,
         MatButtonModule,
-        CommonModule
+        CommonModule,
+        RouterLink
     ],
     providers: [MeganexX8KComponent, DreamAirComponent],
     templateUrl: './driver-settings.component.html',
@@ -50,6 +52,9 @@ export class DriverSettingsComponent implements OnInit, OnDestroy {
     // For vendor-specific drivers: tracks if the neutral driver is enabled (causing lockout)
     neutralDriverEnabled = signal(false)
     nonNativeWarning = signal(false)
+    // on vendor builds the streamed headset *is* the target device, so the
+    // non-native warning becomes a pointer to the vendor tab instead
+    isVendorBuild = vendor === 'galaxyxr'
     webView2Outdated = signal(false)
     webView2Version = signal<string | null>(null)
 

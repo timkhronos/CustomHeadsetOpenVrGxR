@@ -303,14 +303,14 @@ struct GalaxyXrConfig{
 	std::string streamQuality = "default";
 	// uniform scale for the controller render models. the official assets
 	// measure ~124x63mm while the physical controller tapes ~145x70mm.
-	// 2026-08-24 field default 1.16: SteamVR Home mesh overlays the shell
+	// 2026-08-25 default 1.15 (was 1.16 on 08-24): SteamVR Home mesh overlays the shell
 	// in passthrough. scales the MESH system only: geometry, mesh-bearing
 	// component origins, motion pivots/centers and translation vectors.
 	// pose anchors (tip, grip family, base, hand_anchor) are real-metre
 	// physical points and are never scaled; the skeleton and game hand
 	// meshes never see this value. the driver generates a variant folder
 	// and swaps to it live via the render-model name-change reload.
-	double renderModelScale = 1.16;
+	double renderModelScale = 1.15;
 	// apply the fixed raw->grip convention shift to the controller poses
 	// (rotate X +22deg, translate +5cm local Z). what it actually is, per
 	// the 2026-08-24 audit against Game Link's profile: vrlink's raw is

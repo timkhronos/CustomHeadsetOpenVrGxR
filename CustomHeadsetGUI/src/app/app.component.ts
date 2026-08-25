@@ -24,7 +24,7 @@ export class AppComponent {
       route: '/distortion-profile',
     },
     {
-      name: $localize`Streamed Headset`,
+      name: $localize`Galaxy XR`,
       route: '/stream-frame',
     },
     {

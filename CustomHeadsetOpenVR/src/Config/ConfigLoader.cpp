@@ -1261,6 +1261,39 @@ void ConfigLoader::ParseConfig(){
 			}
 			sf.streamFrameSchema = 3;
 		}
+		// schema 4 (2026-08-25, 1.0.0): UNCONDITIONAL reset of Direction
+		// Lead and Freeze Coast Turn. both were tuned while vecAngularVelocity
+		// was reported in the wrong (world) frame; with the frame fixed
+		// (kalmanAngularOutFrame) any non-zero Td bends throws off target.
+		// deliberately ignores custom values, unlike schema 2/3. runs in
+		// memory every load until the GUI persists streamFrameSchema=4.
+		if(newConfig.streamFrame.streamFrameSchema < 4){
+			auto &sf = newConfig.streamFrame;
+			if(sf.kalmanDirLeadMs != 0.0 || sf.kalmanFreezeCoastTurn != 0.0){
+				DriverLog("Config: schema migration - Direction Lead %.1f -> 0 and Freeze Coast Turn %.2f -> 0 (angular frame fix, 1.0.0)", sf.kalmanDirLeadMs, sf.kalmanFreezeCoastTurn);
+			}
+			sf.kalmanDirLeadMs = 0.0;
+			sf.kalmanFreezeCoastTurn = 0.0;
+			// controller offsets from the previous release were measured
+			// against the old grip origin, which moved in 1.0.0. reset the
+			// shared offset layer to the shipped defaults; per-hand trims
+			// are new in 1.0.0 and untouched.
+			{
+				ControllersConfig dc;
+				auto &cc = newConfig.controllers;
+				bool changed = cc.mirrorOffsetsForRightHand != dc.mirrorOffsetsForRightHand;
+				for(int i = 0; i < 3; i++){
+					changed = changed || cc.rotationOffsetDeg[i] != dc.rotationOffsetDeg[i] || cc.positionOffsetCm[i] != dc.positionOffsetCm[i];
+					cc.rotationOffsetDeg[i] = dc.rotationOffsetDeg[i];
+					cc.positionOffsetCm[i] = dc.positionOffsetCm[i];
+				}
+				cc.mirrorOffsetsForRightHand = dc.mirrorOffsetsForRightHand;
+				if(changed){
+					DriverLog("Config: schema migration - controller offsets reset to defaults (grip origin moved, 1.0.0)");
+				}
+			}
+			sf.streamFrameSchema = 4;
+		}
 		// write to global config
 		{
 			std::lock_guard<std::mutex> lock(driverConfigLock);
@@ -1631,7 +1664,8 @@ void ConfigLoader::WriteInfo(){
 				{"graveyardEnable", defaultSettings.streamFrame.graveyardEnable},
 				{"kalmanDeviceTime", defaultSettings.streamFrame.kalmanDeviceTime},
 				{"kalmanPosFreeze3dof", defaultSettings.streamFrame.kalmanPosFreeze3dof},
-				{"kalmanAngularOutFrame", defaultSettings.streamFrame.kalmanAngularOutFrame},
+				// published as the GUI's string enum, the loader accepts both forms
+				{"kalmanAngularOutFrame", defaultSettings.streamFrame.kalmanAngularOutFrame == 0 ? "world" : (defaultSettings.streamFrame.kalmanAngularOutFrame == 2 ? "zero" : "body")},
 				{"kalmanFreezeCoastTurn", defaultSettings.streamFrame.kalmanFreezeCoastTurn},
 				{"kalmanPosFreezeVelDecayMs", defaultSettings.streamFrame.kalmanPosFreezeVelDecayMs},
 				{"kalmanDupCoastMaxMs", defaultSettings.streamFrame.kalmanDupCoastMaxMs},

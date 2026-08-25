@@ -6,5 +6,5 @@ export const routes: Routes = [
     { path: 'stream-frame', loadComponent: () => import('./pages/stream-frame/stream-frame.component').then(x => x.StreamFrameComponent) },
     { path: 'app-settings', loadComponent: () => import('./pages/app-settings/app-settings.component').then(x => x.AppSettingsComponent) },
     { path: 'about', loadComponent: () => import('./pages/about/about.component').then(x => x.AboutComponent) },
-    { path: '**', redirectTo: 'driver-settings' }
+    { path: '**', redirectTo: 'stream-frame' }
 ];

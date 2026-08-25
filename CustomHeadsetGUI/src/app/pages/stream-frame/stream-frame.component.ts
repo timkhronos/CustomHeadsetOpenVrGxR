@@ -24,6 +24,7 @@ function defaultStreamFrame(): StreamFrameConfig {
     contrastMidpoint: 50,
     contrastLinear: false,
     gamma: 2.2,
+    brightness: 1,
     colorMultiplier: { r: 1, g: 1, b: 1 },
     srgbMatrix: [],
     cas: { enable: false, strength: 0.5, perEye: false, strengthLeft: 0.5, strengthRight: 0.5 },
@@ -275,6 +276,42 @@ export class StreamFrameComponent {
           rawSf.streamFrameSchema = 3;
           queueMicrotask(() => this.save());
         }
+        // schema-4 migration (2026-08-25, 1.0.0): UNCONDITIONAL. the angular
+        // velocity frame fix (kalmanAngularOutFrame) invalidated every
+        // Direction Lead tuning - under the corrected frame any non-zero Td
+        // bends throws off target - and retired Freeze Coast Turn. unlike
+        // schema 2/3 this does not check for old defaults: custom values are
+        // reset too, on purpose. mirrors the driver-side migration.
+        if (rawSf && (rawSf.streamFrameSchema ?? 1) < 4) {
+          rawSf.kalmanDirLeadMs = 0;
+          rawSf.kalmanFreezeCoastTurn = 0;
+          // controller offsets from the previous release were measured
+          // against the old grip origin, which moved in 1.0.0 (grip
+          // convention + official pose components). they no longer mean
+          // anything in the new frame, so they go back to the shipped
+          // defaults. per-hand trims did not exist before and are left.
+          const dc = defaultControllers();
+          const rc = this.rootSetting.controllers;
+          if (rc) {
+            rc.rotationOffsetDeg = dc.rotationOffsetDeg;
+            rc.positionOffsetCm = dc.positionOffsetCm;
+            rc.mirrorOffsetsForRightHand = dc.mirrorOffsetsForRightHand;
+          }
+          rawSf.streamFrameSchema = 4;
+          queueMicrotask(() => this.save());
+        }
+        // kalmanAngularOutFrame is an int in the driver (0 world / 1 body /
+        // 2 zero) and a string enum here; older driver builds published the
+        // int, and a reset against that wrote the int back into settings.
+        // normalise both so the select renders and the reset arrow agrees.
+        const frameNames: { [k: number]: string } = { 0: 'world', 1: 'body', 2: 'zero' };
+        if (typeof this.defaults.kalmanAngularOutFrame === 'number') {
+          this.defaults.kalmanAngularOutFrame = frameNames[this.defaults.kalmanAngularOutFrame as any] ?? 'body';
+        }
+        if (rawSf && typeof rawSf.kalmanAngularOutFrame === 'number') {
+          rawSf.kalmanAngularOutFrame = frameNames[rawSf.kalmanAngularOutFrame] ?? 'body';
+          queueMicrotask(() => this.save());
+        }
         this.rootSetting.streamFrame = fillDefaults(this.rootSetting.streamFrame, defaultStreamFrame());
         this.rootSetting.controllers = fillDefaults(this.rootSetting.controllers, defaultControllers());
         this.controllerSettings = this.rootSetting.controllers;
@@ -377,7 +414,7 @@ export class StreamFrameComponent {
   get galaxyXr(): GalaxyXrConfig {
     if (this.rootSetting) {
       if (!this.rootSetting.galaxyXr) {
-        this.rootSetting.galaxyXr = { nativeIdentity: false, nativeInputProfile: false, nativeResolution: true, streamQuality: 'default', renderModelScale: 1.16 };
+        this.rootSetting.galaxyXr = { nativeIdentity: false, nativeInputProfile: false, nativeResolution: true, streamQuality: 'default', renderModelScale: 1.15 };
       }
       if (this.rootSetting.galaxyXr.nativeResolution === undefined) {
         this.rootSetting.galaxyXr.nativeResolution = true;
@@ -386,7 +423,7 @@ export class StreamFrameComponent {
         this.rootSetting.galaxyXr.streamQuality = 'default';
       }
       if (this.rootSetting.galaxyXr.renderModelScale === undefined) {
-        this.rootSetting.galaxyXr.renderModelScale = 1.16;
+        this.rootSetting.galaxyXr.renderModelScale = 1.15;
       }
       if (this.rootSetting.galaxyXr.skeletonOffsetXCm === undefined) {
         this.rootSetting.galaxyXr.skeletonOffsetXCm = 0.0;
@@ -489,7 +526,11 @@ export class StreamFrameComponent {
   shareStatus = signal('');
   // collapsible section state; debug starts closed, everything else open.
   // concrete shape (no index signature) so strict templates allow dot access
-  sections = { color: true, enhance: true, distortion: true, share: true, advanced: true, debug: false, eyeAlign: false, graveyard: false };
+  sections = {
+    headset: true, controllers: true, ctrlFix: true, kalmanAdv: false, ctrlAdv: false, ctrlOffsets: true, tipOffset: false,
+    processing: true, color: true, enhance: true, distortion: true, eyeAlign: false, share: false,
+    advanced: false, debug: false, graveyard: false,
+  };
   // any calibration overlay/mode that would be visible or disruptive in a
   // normal play session — drives the warning banner at the top of the page
   // the CA experiment modes share the mode-4 machinery (dup handling,
@@ -518,7 +559,17 @@ export class StreamFrameComponent {
     return !!(s.distortion?.tune?.enable || s.distortion?.centerTune?.enable
       || c?.aligner?.enable || s.eyeGaze?.probeCapture || s.eyeGaze?.debugGrid
       || s.eyeGaze?.calibDot || s.eyeGaze?.debugRing || s.eyeGaze?.overlayWarped
-      || s.eyeGaze?.swimProbe);
+      || s.eyeGaze?.swimProbe || s.calib?.blackout);
+  }
+  // calib is normally written by the camera tools; the GUI only exposes
+  // blackout, so create the object lazily with the driver's defaults
+  setBlackout(on: boolean) {
+    if (!this.settings) return;
+    if (!this.settings.calib) {
+      this.settings.calib = { blackout: false, eye: -1, patternBrightness: 1, captureMode: false, pattern: -1, patternBits: 10 };
+    }
+    this.settings.calib.blackout = on;
+    this.save();
   }
   private buildProfile(): any {
     const s = this.settings!;

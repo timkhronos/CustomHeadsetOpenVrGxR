@@ -1,6 +1,11 @@
 <div class="field">
     <div class="section-title">
-        Custom Headset Driver
+        Custom Headset Driver &mdash; Galaxy XR
+    </div>
+</div>
+<div class="field">
+    <div class="note">
+        A standalone SteamVR vendor driver for the Samsung Galaxy XR over Steam Link. It gives the headset and its controllers their native identity, models and bindings in SteamVR, corrects controller tracking and throw velocity, and adds the ability to processes the streamed image (color, sharpening, distortion correction) before it is encoded.
     </div>
 </div>
 <div class="field">
@@ -92,15 +97,37 @@
     <div class="section-title" i18n>Links</div>
 </div>
 <div class="field">
-    <div class="title" i18n>Updates, Source Code, and Documentation</div>
+    <div class="title" i18n>Source Code and Releases</div>
     <div class="control">
         <a (click)="openExternal($event, 'https://github.com/timkhronos/CustomHeadsetOpenVrGxR')" href="https://github.com/timkhronos/CustomHeadsetOpenVrGxR" class="donation-link">
             <img src="CustomHeadsetCropped.png" alt="CustomHeadset" class="donation-logo">
             <span i18n>Github Page</span>
         </a>
-        <a (click)="openExternal($event, 'https://github.com/timkhronos/CustomHeadsetOpenVrGxR')" href="https://github.com/timkhronos/CustomHeadsetOpenVrGxR" style="margin-left: 16px;">
-            <span>github.com/timkhronos/CustomHeadsetOpenVrGxR</span>
+        <a (click)="openExternal($event, 'https://github.com/timkhronos/CustomHeadsetOpenVrGxR/releases')" href="https://github.com/timkhronos/CustomHeadsetOpenVrGxR/releases" style="margin-left: 16px;">
+            <span i18n>Releases and changelog</span>
         </a>
+    </div>
+</div>
+<div class="field">
+    <div class="title" i18n>Documentation</div>
+    <div class="control">
+        <a (click)="openExternal($event, 'https://github.com/timkhronos/CustomHeadsetOpenVrGxR/blob/GxR/Docs/StreamFrame.md')" href="https://github.com/timkhronos/CustomHeadsetOpenVrGxR/blob/GxR/Docs/StreamFrame.md">
+            <span i18n>Setup and image processing guide</span>
+        </a>
+        <a (click)="openExternal($event, 'https://github.com/timkhronos/CustomHeadsetOpenVrGxR/blob/GxR/Docs/TunerUsage.md')" href="https://github.com/timkhronos/CustomHeadsetOpenVrGxR/blob/GxR/Docs/TunerUsage.md" style="margin-left: 16px;">
+            <span i18n>Distortion tuner guide</span>
+        </a>
+    </div>
+</div>
+<div class="field">
+    <div class="title" i18n>Report a Problem</div>
+    <div class="control">
+        <a (click)="openExternal($event, 'https://github.com/timkhronos/CustomHeadsetOpenVrGxR/issues')" href="https://github.com/timkhronos/CustomHeadsetOpenVrGxR/issues">
+            <span i18n>Open an issue</span>
+        </a>
+        <div class="note">
+            Attach Steam\logs\vrserver.txt. Please report here, not on the original sboys3 repository.
+        </div>
     </div>
 </div>
 <div class="field">
@@ -110,7 +137,7 @@
             <span>CustomHeadsetOpenVR by sboys3</span>
         </a>
         <div class="note">
-            This is a fork adding stream frame processing for direct mode headsets like the Galaxy XR.
+            This driver is a fork of CustomHeadsetOpenVR. The installer, settings system and the MeganeX / Dream Air support come from the original project.
         </div>
     </div>
 </div>
