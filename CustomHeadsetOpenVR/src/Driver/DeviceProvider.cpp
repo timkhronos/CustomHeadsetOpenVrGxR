@@ -1047,6 +1047,19 @@ bool CustomHeadsetDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr:
 			pose.result = vr::TrackingResult_Running_OK;
 		}
 	}
+	// every controller pose edit below (grip convention, shared offsets,
+	// per-hand trims) is for the streamed Galaxy XR controllers only. a
+	// native pair (Index, Vive) reports its own correct grip and must never
+	// be shifted (field 2026-08-25: knuckles users saw the 22 deg / 5 cm
+	// convention shift). same serial gate the velocity fix uses; cached
+	// after the first read, false while the property is not readable yet.
+	// property query with no lock held.
+	// galaxyXr.controllerBypass: pose left as vrlink sent it (Kalman is
+	// applied further down and is not part of the bypass).
+	const bool streamedController = openVRID != vr::k_unTrackedDeviceIndex_Hmd
+		&& !driverConfig.galaxyXr.controllerBypass
+		&& GetDeviceClass(openVRID) == (int)vr::TrackedDeviceClass_Controller
+		&& IsStreamedController(openVRID);
 	#ifdef VENDOR_GALAXYXR
 	// fixed raw->grip convention shift for the Galaxy XR controllers (see
 	// GalaxyXrConfig::gripConvention): applied before the user's personal
@@ -1054,8 +1067,7 @@ bool CustomHeadsetDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr:
 	// render model components (handgrip/openxr_grip/grip) are identity so
 	// every pose path resolves to this same frame - do not re-add a grip
 	// offset there.
-	if(driverConfig.galaxyXr.gripConvention && openVRID != vr::k_unTrackedDeviceIndex_Hmd
-			&& GetDeviceClass(openVRID) == (int)vr::TrackedDeviceClass_Controller){
+	if(driverConfig.galaxyXr.gripConvention && streamedController){
 		static const double kGripConventionRotDeg[3] = {22, 0, 0};
 		double fixLocal[3] = {0, 0, 0.05};
 		double fixWorld[3];
@@ -1091,8 +1103,7 @@ bool CustomHeadsetDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr:
 		|| rotationOffsetDeg[1] != 0 || rotationOffsetDeg[2] != 0;
 	bool hasPositionOffset = positionOffsetCm[0] != 0
 		|| positionOffsetCm[1] != 0 || positionOffsetCm[2] != 0;
-	if((hasRotationOffset || hasPositionOffset) && openVRID != vr::k_unTrackedDeviceIndex_Hmd
-			&& GetDeviceClass(openVRID) == (int)vr::TrackedDeviceClass_Controller){
+	if((hasRotationOffset || hasPositionOffset) && streamedController){
 		// mirror the left-hand-authored offsets for the right controller:
 		// physical pairs are mirror images, so the tracked-origin-to-grip
 		// displacement mirrors too (position X and rotation Y/Z negate)
@@ -1138,8 +1149,7 @@ bool CustomHeadsetDeviceProvider::HandleDevicePoseUpdated(uint32_t openVRID, vr:
 	}
 	// per-hand unmirrored trims (ControllersConfig::left*/right*): applied
 	// after the shared mirrored offsets, same local-frame convention.
-	if(openVRID != vr::k_unTrackedDeviceIndex_Hmd
-			&& GetDeviceClass(openVRID) == (int)vr::TrackedDeviceClass_Controller){
+	if(streamedController){
 		int hand = -1;
 		{
 			std::lock_guard<std::mutex> handGuard(poseLogLock);
@@ -4897,11 +4907,19 @@ bool CustomHeadsetDeviceProvider::HandleDeviceAdded(const char *&pchDeviceSerial
 		#endif
 	}
 	#ifdef VENDOR_GALAXYXR
-	if(eDeviceClass == vr::TrackedDeviceClass_Controller && driverConfig.galaxyXr.nativeIdentity){
-		// vrlink's Galaxy XR controllers; the shim verifies the tracking
-		// system at activate and stays inert on anything else
+	// the controller shim carries identity (models, icons), the input
+	// profile and the official pose components. it is created for every
+	// streamed controller whenever any of those is wanted; no identity
+	// checks beyond the serial (2026-08-26: APK identities are unreliable,
+	// the user picked this driver for a Galaxy XR, stamp on request).
+	if(eDeviceClass == vr::TrackedDeviceClass_Controller && !driverConfig.galaxyXr.controllerBypass
+			&& (driverConfig.galaxyXr.nativeIdentity || driverConfig.galaxyXr.nativeInputProfile)){
 		std::string serial = pchDeviceSerialNumber ? pchDeviceSerialNumber : "";
-		if(serial.rfind("SamsungVST-Controller", 0) == 0){
+		// SamsungVST-Controller-* on the patched APK, VRLINKQ2_Controller_* on
+		// the stock one. "Controller" excludes the VRLINKQ_Hand_* hand trackers.
+		bool streamedController = (serial.rfind("SamsungVST-Controller", 0) == 0)
+			|| (serial.rfind("VRLINK", 0) == 0 && serial.find("Controller") != std::string::npos);
+		if(streamedController){
 			GalaxyXRControllerShim* controllerShim = new GalaxyXRControllerShim(serial);
 			shims.insert(controllerShim);
 			pDriver = new ShimTrackedDeviceDriver(controllerShim, pDriver);

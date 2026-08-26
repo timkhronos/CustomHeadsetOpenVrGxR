@@ -301,6 +301,13 @@ struct GalaxyXrConfig{
 	//           starvation and fall back to high)
 	// effective at the next SteamVR start / headset connect.
 	std::string streamQuality = "default";
+	// streamQuality == "custom": the three vrlink keys written verbatim.
+	// 2026-08-26 field: streamFormatWidth is the width vrlink actually
+	// encodes at (m_nTargetEncodeWidth tracks it); encodeWidth alone does
+	// nothing observable. bandwidth is targetBandwidth/recommendedBandwidthMbit.
+	int customEncodeWidth = 3072;
+	int customStreamFormatWidth = 3072;
+	int customBandwidthMbit = 350;
 	// uniform scale for the controller render models. the official assets
 	// measure ~124x63mm while the physical controller tapes ~145x70mm.
 	// 2026-08-25 default 1.15 (was 1.16 on 08-24): SteamVR Home mesh overlays the shell
@@ -358,6 +365,12 @@ struct GalaxyXrConfig{
 	// per-hand trims are treated as vrlink error correction and are NOT
 	// folded in. false = use the base json values as authored.
 	bool officialComponents = true;
+	// 2026-08-26: leave the streamed controllers exactly as vrlink presents
+	// them: no identity/models/icons, no input profile, no pose components,
+	// no grip convention, no offsets. the Kalman velocity fix is NOT gated
+	// by this (it has its own mode switch). for A/B against stock and for
+	// people who only want the image processing.
+	bool controllerBypass = false;
 	// controller identity experiment (2026-08-24): when true the driver
 	// adds an oculus_touch layout (priority 95, above knuckles) to the
 	// shipped remapping json at startup so Touch-authored game bindings

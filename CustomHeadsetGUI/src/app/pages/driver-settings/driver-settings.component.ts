@@ -16,6 +16,7 @@ import {MatButtonModule} from '@angular/material/button'
 import { AppSettingService } from '../../services/app-setting.service';
 import { AppUpdateService } from '../../services/app-update.service'
 import { RouterLink } from '@angular/router';
+import { DriverEnableBannerComponent } from '../../utilities/driver-enable-banner/driver-enable-banner.component';
 
 export interface TabConfig {
   type: string;
@@ -33,7 +34,8 @@ export interface TabConfig {
         MatIconModule,
         MatButtonModule,
         CommonModule,
-        RouterLink
+        RouterLink,
+        DriverEnableBannerComponent
     ],
     providers: [MeganexX8KComponent, DreamAirComponent],
     templateUrl: './driver-settings.component.html',

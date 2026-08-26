@@ -33,6 +33,8 @@ private:
 	void ApplyIdentity();
 	bool appliedNativeResolution = false;
 	std::string appliedStreamQuality;
+	// custom tier values as last applied, for hot-reload change detection
+	int appliedCustomEncodeWidth = 0, appliedCustomStreamFormatWidth = 0, appliedCustomBandwidthMbit = 0;
 
 	vr::PropertyContainerHandle_t container = vr::k_ulInvalidPropertyContainer;
 	bool active = false;
@@ -57,7 +59,9 @@ private:
 	// resolve the current model name from config (variant or default)
 	std::string TargetModelName();
 
+
 	std::string appliedModel;
+	int iconPollFrames = 0;
 	std::string serial;
 	bool isLeft = false;
 	vr::PropertyContainerHandle_t container = vr::k_ulInvalidPropertyContainer;

@@ -28,6 +28,9 @@ export type GalaxyXrConfig = {
   nativeInputProfile?: boolean,
   nativeResolution?: boolean,
   streamQuality?: string,
+  customEncodeWidth?: number,
+  customStreamFormatWidth?: number,
+  customBandwidthMbit?: number,
   renderModelScale?: number,
   gripConvention?: boolean,
   skeletonOffsetXCm?: number,
@@ -44,6 +47,8 @@ export type GalaxyXrConfig = {
   meshOffsetYCm?: number,
   meshOffsetZCm?: number,
   officialComponents?: boolean,
+  // leave streamed controllers as vrlink presents them (Kalman excluded)
+  controllerBypass?: boolean,
   simulateTouch?: boolean,
   aimTrimXCm?: number,
   aimTrimYCm?: number,
@@ -177,7 +182,7 @@ export type StreamFrameConfig = {
   k1: number;
   k2: number;
   distortion: StreamFrameDistortionConfig;
-  brightness?: number;
+  brightness: number;
   calib?: StreamFrameCalibConfig;
   centerOffsetXLeft: number;
   centerOffsetXRight: number;

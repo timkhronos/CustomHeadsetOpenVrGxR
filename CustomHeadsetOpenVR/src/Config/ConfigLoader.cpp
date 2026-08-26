@@ -392,6 +392,15 @@ void ConfigLoader::ParseConfig(){
 			if(galaxyXrData["streamQuality"].is_string()){
 				newConfig.galaxyXr.streamQuality = galaxyXrData["streamQuality"].get<std::string>();
 			}
+			if(galaxyXrData["customEncodeWidth"].is_number()){
+				newConfig.galaxyXr.customEncodeWidth = galaxyXrData["customEncodeWidth"].get<int>();
+			}
+			if(galaxyXrData["customStreamFormatWidth"].is_number()){
+				newConfig.galaxyXr.customStreamFormatWidth = galaxyXrData["customStreamFormatWidth"].get<int>();
+			}
+			if(galaxyXrData["customBandwidthMbit"].is_number()){
+				newConfig.galaxyXr.customBandwidthMbit = galaxyXrData["customBandwidthMbit"].get<int>();
+			}
 			if(galaxyXrData["renderModelScale"].is_number()){
 				newConfig.galaxyXr.renderModelScale = galaxyXrData["renderModelScale"].get<double>();
 			}
@@ -433,6 +442,9 @@ void ConfigLoader::ParseConfig(){
 			}
 			if(galaxyXrData["officialComponents"].is_boolean()){
 				newConfig.galaxyXr.officialComponents = galaxyXrData["officialComponents"].get<bool>();
+			}
+			if(galaxyXrData["controllerBypass"].is_boolean()){
+				newConfig.galaxyXr.controllerBypass = galaxyXrData["controllerBypass"].get<bool>();
 			}
 			if(galaxyXrData["meshOffsetXCm"].is_number()){
 				newConfig.galaxyXr.meshOffsetXCm = galaxyXrData["meshOffsetXCm"].get<double>();

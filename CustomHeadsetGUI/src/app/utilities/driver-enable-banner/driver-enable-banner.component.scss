@@ -1,0 +1,19 @@
+.driver-banner {
+    margin: 0.75em 0 1em 0;
+    padding: 0.75em 1em;
+    border-radius: 6px;
+    border: 1px solid var(--mat-sys-error, #b3261e);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5em;
+}
+.driver-banner-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75em;
+}
+.driver-banner .note {
+    opacity: 0.8;
+    font-size: 0.9em;
+}

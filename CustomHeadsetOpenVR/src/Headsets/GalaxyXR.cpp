@@ -1,4 +1,5 @@
 #include "GalaxyXR.h"
+#include <algorithm>
 #include "../Config/ConfigLoader.h"
 #include <filesystem>
 #include <fstream>
@@ -22,17 +23,28 @@ static bool SetStringIfDifferent(vr::PropertyContainerHandle_t container, vr::ET
 
 // prefix is one of headset_galaxy_xr_status / left_galaxy_xr_status /
 // right_galaxy_xr_status (icon set by Vilkka, see icons/galaxy_xr/CREDITS.txt)
-static void SetDeviceIcons(vr::PropertyContainerHandle_t container, const std::string &prefix){
+// returns true if any icon property was (re)written. the "ready" path is
+// also the drift sentinel RunFrame polls: vrlink picks controller status
+// icons from the HMD family and can rewrite them after we did (field
+// 2026-08-25: with a samsung-default hmd_config the controller icons did
+// not stick while models and bindings did), and that rewrite does not
+// always reach us as a PropertyChanged event.
+static bool SetDeviceIcons(vr::PropertyContainerHandle_t container, const std::string &prefix){
 	std::string base = "{" + driverConfigLoader.info.driverName + "}/icons/galaxy_xr/" + prefix;
-	SetStringIfDifferent(container, vr::Prop_NamedIconPathDeviceOff_String,            base + "_off.png");
-	SetStringIfDifferent(container, vr::Prop_NamedIconPathDeviceSearching_String,      base + "_searching.gif");
-	SetStringIfDifferent(container, vr::Prop_NamedIconPathDeviceSearchingAlert_String, base + "_searching_alert.gif");
-	SetStringIfDifferent(container, vr::Prop_NamedIconPathDeviceReady_String,          base + "_ready.png");
-	SetStringIfDifferent(container, vr::Prop_NamedIconPathDeviceReadyAlert_String,     base + "_ready_alert.png");
-	SetStringIfDifferent(container, vr::Prop_NamedIconPathDeviceNotReady_String,       base + "_error.png");
-	SetStringIfDifferent(container, vr::Prop_NamedIconPathDeviceStandby_String,        base + "_standby.png");
-	SetStringIfDifferent(container, vr::Prop_NamedIconPathDeviceStandbyAlert_String,   base + "_standby_alert.png");
-	SetStringIfDifferent(container, vr::Prop_NamedIconPathDeviceAlertLow_String,       base + "_ready_low.png");
+	bool wrote = false;
+	wrote |= SetStringIfDifferent(container, vr::Prop_NamedIconPathDeviceOff_String,            base + "_off.png");
+	wrote |= SetStringIfDifferent(container, vr::Prop_NamedIconPathDeviceSearching_String,      base + "_searching.gif");
+	wrote |= SetStringIfDifferent(container, vr::Prop_NamedIconPathDeviceSearchingAlert_String, base + "_searching_alert.gif");
+	wrote |= SetStringIfDifferent(container, vr::Prop_NamedIconPathDeviceReady_String,          base + "_ready.png");
+	wrote |= SetStringIfDifferent(container, vr::Prop_NamedIconPathDeviceReadyAlert_String,     base + "_ready_alert.png");
+	wrote |= SetStringIfDifferent(container, vr::Prop_NamedIconPathDeviceNotReady_String,       base + "_error.png");
+	wrote |= SetStringIfDifferent(container, vr::Prop_NamedIconPathDeviceStandby_String,        base + "_standby.png");
+	wrote |= SetStringIfDifferent(container, vr::Prop_NamedIconPathDeviceStandbyAlert_String,   base + "_standby_alert.png");
+	wrote |= SetStringIfDifferent(container, vr::Prop_NamedIconPathDeviceAlertLow_String,       base + "_ready_low.png");
+	return wrote;
+}
+static std::string ExpectedReadyIcon(const std::string &prefix){
+	return "{" + driverConfigLoader.info.driverName + "}/icons/galaxy_xr/" + prefix + "_ready.png";
 }
 
 // the Galaxy XR native per-eye render geometry; see GalaxyXrConfig::nativeResolution
@@ -69,7 +81,20 @@ static void RemoveIntIfOurs(const char* key, std::initializer_list<int> ourValue
 
 static void ApplyStreamQualitySetting(){
 	const StreamTier* tier = FindTier(driverConfig.galaxyXr.streamQuality);
-	if(tier){
+	if(driverConfig.galaxyXr.streamQuality == "custom"){
+		// verbatim user values; clamped only to keep vrlink from choking on
+		// nonsense (it rejects widths it cannot allocate and 0 bandwidth)
+		int ew = std::max(512, std::min(8192, driverConfig.galaxyXr.customEncodeWidth));
+		int sfw = std::max(512, std::min(8192, driverConfig.galaxyXr.customStreamFormatWidth));
+		int bw = std::max(10, std::min(2000, driverConfig.galaxyXr.customBandwidthMbit));
+		vr::VRSettings()->SetInt32("driver_vrlink", "encodeWidth", ew);
+		vr::VRSettings()->SetInt32("driver_vrlink", "streamFormatWidth", sfw);
+		vr::VRSettings()->SetBool("driver_vrlink", "automaticStreamFormatWidth", false);
+		vr::VRSettings()->SetBool("driver_vrlink", "automaticBandwidth", false);
+		vr::VRSettings()->SetInt32("driver_vrlink", "recommendedBandwidthMbit", bw);
+		vr::VRSettings()->SetInt32("driver_vrlink", "targetBandwidth", bw);
+		DriverLog("GalaxyXR: stream quality 'custom' (encodeWidth %d, streamFormatWidth %d, %d Mbit/s; effective next start/connect)", ew, sfw, bw);
+	}else if(tier){
 		vr::VRSettings()->SetInt32("driver_vrlink", "encodeWidth", tier->encodeWidth);
 		vr::VRSettings()->SetInt32("driver_vrlink", "streamFormatWidth", 1536);
 		vr::VRSettings()->SetBool("driver_vrlink", "automaticStreamFormatWidth", false);
@@ -81,10 +106,12 @@ static void ApplyStreamQualitySetting(){
 	}else{
 		// default (or unknown): remove tier keys we own so vrlink built-in
 		// defaults apply, matching the community tool's Default mode
-		RemoveIntIfOurs("encodeWidth", {2048, 2560, 3072, 4032});
-		RemoveIntIfOurs("streamFormatWidth", {1536});
-		RemoveIntIfOurs("recommendedBandwidthMbit", {250, 300, 350});
-		RemoveIntIfOurs("targetBandwidth", {250, 300, 350});
+		// the custom values are included so leaving custom mode cleans up too
+		const auto &g = driverConfig.galaxyXr;
+		RemoveIntIfOurs("encodeWidth", {2048, 2560, 3072, 4032, g.customEncodeWidth});
+		RemoveIntIfOurs("streamFormatWidth", {1536, g.customStreamFormatWidth});
+		RemoveIntIfOurs("recommendedBandwidthMbit", {250, 300, 350, g.customBandwidthMbit});
+		RemoveIntIfOurs("targetBandwidth", {250, 300, 350, g.customBandwidthMbit});
 		vr::EVRSettingsError err = vr::VRSettingsError_None;
 		bool a = vr::VRSettings()->GetBool("driver_vrlink", "automaticStreamFormatWidth", &err);
 		if(err == vr::VRSettingsError_None && !a){
@@ -147,16 +174,16 @@ void GalaxyXRHmdShim::PosTrackedDeviceActivate(uint32_t &unObjectId, vr::EVRInit
 	// tracking system is "oculus" (vrlink's Quest Pro profile asserts it;
 	// SamsungVST only survives on the controllers), so gate on the serial
 	// with the tracking system as a fallback
+	// no identity gate (2026-08-26): the patched Steam Link APK says
+	// SamsungVST, the stock one says GENERICHMD1 / vrlink with an empty
+	// model, and neither is a promise about future builds. the user installed
+	// a Galaxy XR driver and asked for the Galaxy XR identity; stamp it and
+	// report what was there, so a bug report still shows the APK identity.
 	std::string serial = vr::VRProperties()->GetStringProperty(container, vr::Prop_SerialNumber_String);
 	std::string trackingSystem = vr::VRProperties()->GetStringProperty(container, vr::Prop_TrackingSystemName_String);
-	if(serial.find("GALAXYXR") == std::string::npos && trackingSystem != "SamsungVST"){
-		DriverLog("GalaxyXRHmdShim: serial \"%s\" / tracking system \"%s\" is not a Galaxy XR - staying inert",
-			serial.c_str(), trackingSystem.c_str());
-		shimActive = false;
-		return;
-	}
-
 	origModelNumber = vr::VRProperties()->GetStringProperty(container, vr::Prop_ModelNumber_String);
+	DriverLog("GalaxyXRHmdShim: stamping Galaxy XR identity over serial \"%s\" / tracking system \"%s\" / model \"%s\"",
+		serial.c_str(), trackingSystem.c_str(), origModelNumber.c_str());
 	origManufacturer = vr::VRProperties()->GetStringProperty(container, vr::Prop_ManufacturerName_String);
 	origHmdInputProfile = vr::VRProperties()->GetStringProperty(container, vr::Prop_InputProfilePath_String);
 	haveBackup = true;
@@ -168,6 +195,9 @@ void GalaxyXRHmdShim::PosTrackedDeviceActivate(uint32_t &unObjectId, vr::EVRInit
 	appliedNativeResolution = driverConfig.galaxyXr.nativeResolution;
 	ApplyStreamQualitySetting();
 	appliedStreamQuality = driverConfig.galaxyXr.streamQuality;
+	appliedCustomEncodeWidth = driverConfig.galaxyXr.customEncodeWidth;
+	appliedCustomStreamFormatWidth = driverConfig.galaxyXr.customStreamFormatWidth;
+	appliedCustomBandwidthMbit = driverConfig.galaxyXr.customBandwidthMbit;
 }
 
 void GalaxyXRHmdShim::ApplyIdentity(){
@@ -177,7 +207,9 @@ void GalaxyXRHmdShim::ApplyIdentity(){
 	bool wrote = false;
 	wrote |= SetStringIfDifferent(container, vr::Prop_ModelNumber_String, "Galaxy XR");
 	wrote |= SetStringIfDifferent(container, vr::Prop_ManufacturerName_String, "Samsung");
-	SetDeviceIcons(container, "headset_galaxy_xr_status");
+	if(SetDeviceIcons(container, "headset_galaxy_xr_status")){
+		DriverLog("GalaxyXRHmdShim: status icons applied");
+	}
 	if(driverConfig.galaxyXr.nativeInputProfile){
 		// repair the HMD's dangling {vrlink}/input/galaxy_xr_hmd_profile.json
 		// reference with our shipped official copy
@@ -206,9 +238,17 @@ void GalaxyXRHmdShim::RunFrame(){
 		appliedNativeResolution = driverConfig.galaxyXr.nativeResolution;
 		ApplyNativeResolutionSetting();
 	}
-	if(active && driverConfig.galaxyXr.streamQuality != appliedStreamQuality){
-		appliedStreamQuality = driverConfig.galaxyXr.streamQuality;
-		ApplyStreamQualitySetting();
+	{
+		const auto &g = driverConfig.galaxyXr;
+		bool customChanged = g.streamQuality == "custom" && (g.customEncodeWidth != appliedCustomEncodeWidth
+			|| g.customStreamFormatWidth != appliedCustomStreamFormatWidth || g.customBandwidthMbit != appliedCustomBandwidthMbit);
+		if(active && (g.streamQuality != appliedStreamQuality || customChanged)){
+			appliedStreamQuality = g.streamQuality;
+			appliedCustomEncodeWidth = g.customEncodeWidth;
+			appliedCustomStreamFormatWidth = g.customStreamFormatWidth;
+			appliedCustomBandwidthMbit = g.customBandwidthMbit;
+			ApplyStreamQualitySetting();
+		}
 	}
 }
 
@@ -233,14 +273,13 @@ void GalaxyXRControllerShim::PosTrackedDeviceActivate(uint32_t &unObjectId, vr::
 	}
 	container = vr::VRProperties()->TrackedDeviceToPropertyContainer(unObjectId);
 
+	// no identity gate (see GalaxyXRHmdShim): stamp on request, log what
+	// vrlink had put there. "oculus" / Quest2 model on the stock APK,
+	// SamsungVST on the patched one.
 	std::string trackingSystem = vr::VRProperties()->GetStringProperty(container, vr::Prop_TrackingSystemName_String);
-	if(trackingSystem != "SamsungVST"){
-		DriverLog("GalaxyXRControllerShim: %s tracking system is \"%s\", not SamsungVST - staying inert",
-			serial.c_str(), trackingSystem.c_str());
-		shimActive = false;
-		return;
-	}
-
+	std::string origModel = vr::VRProperties()->GetStringProperty(container, vr::Prop_ModelNumber_String);
+	DriverLog("GalaxyXRControllerShim: %s tracking system \"%s\" / model \"%s\"",
+		serial.c_str(), trackingSystem.c_str(), origModel.c_str());
 	origRenderModel = vr::VRProperties()->GetStringProperty(container, vr::Prop_RenderModelName_String);
 	origInputProfile = vr::VRProperties()->GetStringProperty(container, vr::Prop_InputProfilePath_String);
 	origControllerType = vr::VRProperties()->GetStringProperty(container, vr::Prop_ControllerType_String);
@@ -648,12 +687,18 @@ void GalaxyXRControllerShim::ApplyIdentity(){
 	if(!active){
 		return;
 	}
-	std::string model = TargetModelName();
-	bool wrote = SetStringIfDifferent(container, vr::Prop_RenderModelName_String, model);
-	SetDeviceIcons(container, isLeft ? "left_galaxy_xr_status" : "right_galaxy_xr_status");
-	if(wrote){
-		appliedModel = model;
-		DriverLog("GalaxyXRControllerShim: rendermodel %s applied for %s", model.c_str(), serial.c_str());
+	// the shim now also exists for input-profile-only setups, so the
+	// model/icon half is gated on nativeIdentity here rather than at creation
+	if(driverConfig.galaxyXr.nativeIdentity){
+		std::string model = TargetModelName();
+		bool wrote = SetStringIfDifferent(container, vr::Prop_RenderModelName_String, model);
+		if(SetDeviceIcons(container, isLeft ? "left_galaxy_xr_status" : "right_galaxy_xr_status")){
+			DriverLog("GalaxyXRControllerShim: status icons applied for %s", serial.c_str());
+		}
+		if(wrote){
+			appliedModel = model;
+			DriverLog("GalaxyXRControllerShim: rendermodel %s applied for %s", model.c_str(), serial.c_str());
+		}
 	}
 	if(driverConfig.galaxyXr.nativeInputProfile){
 		SyncTouchLayout();
@@ -677,9 +722,26 @@ void GalaxyXRControllerShim::ApplyIdentity(){
 }
 
 void GalaxyXRControllerShim::RunFrame(){
+	if(!active){
+		return;
+	}
+	if(!driverConfig.galaxyXr.nativeIdentity){
+		return;
+	}
 	// config hot-reload: swap the model live when the variant changes
-	if(active && TargetModelName() != appliedModel){
+	if(TargetModelName() != appliedModel){
 		ApplyIdentity();
+		return;
+	}
+	// icon drift poll, ~1 Hz: re-assert if vrlink rewrote the status icons
+	// behind us (see SetDeviceIcons). one property read per second.
+	if(++iconPollFrames >= 90){
+		iconPollFrames = 0;
+		std::string ready = vr::VRProperties()->GetStringProperty(container, vr::Prop_NamedIconPathDeviceReady_String);
+		if(ready != ExpectedReadyIcon(isLeft ? "left_galaxy_xr_status" : "right_galaxy_xr_status")){
+			DriverLog("GalaxyXRControllerShim: status icons drifted for %s (now \"%s\"), re-asserting", serial.c_str(), ready.c_str());
+			ApplyIdentity();
+		}
 	}
 }
 

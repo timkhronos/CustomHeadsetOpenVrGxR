@@ -1,4 +1,5 @@
 @if(settings){
+<app-driver-enable-banner></app-driver-enable-banner>
 <div class="field">
     <div class="note">Galaxy XR driver settings. Headset and controller identity changes need a SteamVR restart; everything else applies live within about a second.</div>
 </div>
@@ -43,9 +44,42 @@
             <mat-option value="high">High &mdash; 3072 / 300 Mbit/s</mat-option>
             <mat-option value="highest">Highest &mdash; 3072 / 350 Mbit/s</mat-option>
             <mat-option value="ultra">Ultra &mdash; 4032 / 350 Mbit/s (Wi-Fi 7)</mat-option>
+            <mat-option value="custom">Custom &mdash; set the vrlink values yourself</mat-option>
         </mat-select>
     </div>
 </div>
+@if(galaxyXr.streamQuality === 'custom'){
+<div class="field">
+    <div class="title">
+        <span>Custom: Encode Width</span>
+        <app-field-tip info="vrlink encodeWidth. In testing this had no visible effect on its own; Stream Format Width is what vrlink actually encodes at. Kept for completeness. Takes effect at the next SteamVR start / headset connect." />
+        <app-reset-button [canReset]="galaxyXr.customEncodeWidth !== 3072" (resetClick)="galaxyXr.customEncodeWidth = 3072; save()"></app-reset-button>
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="galaxyXr.customEncodeWidth" step="256" min="512" max="8192" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Custom: Stream Format Width</span>
+        <app-field-tip info="vrlink streamFormatWidth: the per-eye width the video is actually encoded and decoded at (vrlink's m_nTargetEncodeWidth follows this). The panel is 3552 wide; wider is wasted. The old presets pinned this at 1536. Takes effect at the next SteamVR start / headset connect." />
+        <app-reset-button [canReset]="galaxyXr.customStreamFormatWidth !== 3072" (resetClick)="galaxyXr.customStreamFormatWidth = 3072; save()"></app-reset-button>
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="galaxyXr.customStreamFormatWidth" step="256" min="512" max="8192" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Custom: Bandwidth (Mbit/s)</span>
+        <app-field-tip info="vrlink targetBandwidth and recommendedBandwidthMbit, with automatic bandwidth off. This is the encoder's ceiling, not its average; check the actual rate with the Steam Link stats overlay on motion. Some reports say vrlink clamps at 350, others run 600; unverified. Takes effect at the next headset connect." />
+        <app-reset-button [canReset]="galaxyXr.customBandwidthMbit !== 350" (resetClick)="galaxyXr.customBandwidthMbit = 350; save()"></app-reset-button>
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="galaxyXr.customBandwidthMbit" step="25" min="10" max="2000" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+}
 <div class="field">
     <div class="note" i18n>Native identity changes take effect after restarting SteamVR.</div>
 </div>
@@ -89,6 +123,19 @@
     <div class="section-title collapsible level-1" (click)="sections.ctrlFix = !sections.ctrlFix"><span>Controller Fix</span><span class="chevron" [class.closed]="!sections.ctrlFix">▾</span></div>
 </div>
 @if(sections.ctrlFix){
+@if(vendor && galaxyXr){
+<div class="field">
+    <div class="title">
+        <span>Grip Convention</span>
+        <app-field-tip info="Shifts the raw streamed controller pose (22&deg; pitch, 5 cm) into SteamVR's grip convention so held objects sit where games expect them and the official pose components land on the right spots. Recommended on. Turn off only if a Steam Link build already reports a grip-convention pose and the controllers sit visibly wrong." />
+        <app-reset-button [canReset]="galaxyXr.gripConvention === false" (resetClick)="galaxyXr.gripConvention = true; save()"></app-reset-button>
+    </div>
+    <div class="control">
+        <mat-slide-toggle [(ngModel)]="galaxyXr.gripConvention" (ngModelChange)="save()" [disabled]="!!galaxyXr.controllerBypass"></mat-slide-toggle>
+        @if(galaxyXr.controllerBypass){<span class="note">controller bypass is on</span>}
+    </div>
+</div>
+}
 <div class="field">
     <div class="title">
         <span>Controller Fix Mode</span>
@@ -288,6 +335,18 @@
     <div class="section-title collapsible level-1" (click)="sections.ctrlAdv = !sections.ctrlAdv"><span>Controllers Advanced</span><span class="chevron" [class.closed]="!sections.ctrlAdv">▾</span></div>
 </div>
 @if(sections.ctrlAdv){
+@if(vendor && galaxyXr){
+<div class="field">
+    <div class="title">
+        <span>Controller Bypass</span>
+        <app-field-tip info="Leave the streamed controllers exactly as vrlink presents them: no Galaxy XR identity, models or icons, no official input profile or pose components, no grip convention, no offsets. Kalman is not part of the bypass; use Controller Fix Mode to turn it off. For A/B tests against stock, or if you only want the image processing. Identity and input profile changes take effect after a SteamVR restart." />
+        <app-reset-button [canReset]="!!galaxyXr.controllerBypass" (resetClick)="galaxyXr.controllerBypass = false; save()"></app-reset-button>
+    </div>
+    <div class="control">
+        <mat-slide-toggle [(ngModel)]="galaxyXr.controllerBypass" (ngModelChange)="save()"></mat-slide-toggle>
+    </div>
+</div>
+}
 @if (controllerSettings) {
 <div class="field">
     <div class="section-title collapsible level-2" (click)="sections.ctrlOffsets = !sections.ctrlOffsets"><span>Controller Offsets</span><span class="chevron" [class.closed]="!sections.ctrlOffsets">▾</span></div>

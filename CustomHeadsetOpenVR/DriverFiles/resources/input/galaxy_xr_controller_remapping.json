@@ -50,6 +50,16 @@
       "simulate_HMD" : true,
       "autoremappings" : [
         {
+          "from" : "/user/hand/right/input/trigger",
+          "to" : "/user/hand/right/input/trigger",
+          "parameters" : {
+            "click_activate_threshold" : "0.55",
+            "click_deactivate_threshold" : "0.5",
+            "touch_activate_threshold" : "0.02",
+            "touch_deactivate_threshold" : "0.01"
+          }
+        },
+        {
           "from" : "/user/hand/right/input/grip",
           "to" : "/user/hand/right/input/grip",
           "parameters": {

@@ -14,6 +14,7 @@ import { vendor } from '../../../environment';
 import { FieldTipComponent } from '../../utilities/field-tip/field-tip.component';
 import { ResetButtonComponent } from '../../utilities/reset-button/reset-button.component';
 import { StreamFrameCurveComponent } from '../../utilities/stream-frame-curve/stream-frame-curve.component';
+import { DriverEnableBannerComponent } from '../../utilities/driver-enable-banner/driver-enable-banner.component';
 
 function defaultStreamFrame(): StreamFrameConfig {
   return {
@@ -198,7 +199,8 @@ function fillDefaults(target: any, defaults: any): any {
     MatInputModule,
     FieldTipComponent,
     ResetButtonComponent,
-    StreamFrameCurveComponent
+    StreamFrameCurveComponent,
+    DriverEnableBannerComponent
   ],
   templateUrl: './stream-frame.component.html',
   styleUrl: './stream-frame.component.scss'
@@ -463,6 +465,21 @@ export class StreamFrameComponent {
       }
       if (this.rootSetting.galaxyXr.officialComponents === undefined) {
         this.rootSetting.galaxyXr.officialComponents = true;
+      }
+      if (this.rootSetting.galaxyXr.gripConvention === undefined) {
+        this.rootSetting.galaxyXr.gripConvention = true;
+      }
+      if (this.rootSetting.galaxyXr.controllerBypass === undefined) {
+        this.rootSetting.galaxyXr.controllerBypass = false;
+      }
+      if (this.rootSetting.galaxyXr.customEncodeWidth === undefined) {
+        this.rootSetting.galaxyXr.customEncodeWidth = 3072;
+      }
+      if (this.rootSetting.galaxyXr.customStreamFormatWidth === undefined) {
+        this.rootSetting.galaxyXr.customStreamFormatWidth = 3072;
+      }
+      if (this.rootSetting.galaxyXr.customBandwidthMbit === undefined) {
+        this.rootSetting.galaxyXr.customBandwidthMbit = 350;
       }
       if (this.rootSetting.galaxyXr.simulateTouch === undefined) {
         this.rootSetting.galaxyXr.simulateTouch = false;

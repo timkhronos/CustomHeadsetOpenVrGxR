@@ -1,0 +1,25 @@
+@if(show()){
+<div class="driver-banner">
+  <div class="driver-banner-row">
+    <mat-icon class="warn-color" style="vertical-align: middle;">warning</mat-icon>
+    @if(isVendor && neutralDriverEnabled()){
+    <span i18n><b>The stock CustomHeadsetOpenVR driver currently has the headset.</b> Both drivers are installed, and SteamVR only lets one of them run. Nothing on this page takes effect until you switch.</span>
+    } @else if(isVendor){
+    <span i18n><b>The Galaxy XR driver is disabled in SteamVR.</b> Nothing on this page takes effect until it is enabled.</span>
+    } @else {
+    <span i18n>Custom Headset's driver is disabled</span>
+    }
+  </div>
+  <div class="driver-banner-row">
+    @if(isVendor && neutralDriverEnabled()){
+    <button mat-flat-button color="primary" i18n (click)="enableDriver()">Switch to the Galaxy XR driver</button>
+    <span class="note" i18n>Disables CustomHeadsetOpenVR and enables this driver. Restart SteamVR afterwards. You can switch back from the other GUI at any time.</span>
+    } @else {
+    <button mat-flat-button color="primary" i18n (click)="enableDriver()">Enable</button>
+    }
+    @if(driverBlocked()){
+    <button mat-stroked-button i18n (click)="unblockAllDrivers()">Unblock All</button>
+    }
+  </div>
+</div>
+}
