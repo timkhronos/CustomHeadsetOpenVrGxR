@@ -29,8 +29,16 @@ export type GalaxyXrConfig = {
   nativeResolution?: boolean,
   streamQuality?: string,
   customEncodeWidth?: number,
-  customStreamFormatWidth?: number,
+  customStreamFormatWidth?: number, // legacy: driver writes streamFormatWidth = customEncodeWidth
   customBandwidthMbit?: number,
+  customStreamFormatWidthOverride?: number, // debug: split encodeWidth/streamFormatWidth probe, settings.json only
+  vrlinkHeadsetProfile?: boolean,
+  profileMaxStreamFormatWidth?: number,
+  profileSupports10bit?: boolean,
+  force10bit?: boolean,
+  vrlinkDebugOverlay?: boolean,
+  vrlinkMaxVideoQueueLatencyUs?: number,
+  vrlinkBackoffRecoveryCoefficient?: number,
   renderModelScale?: number,
   gripConvention?: boolean,
   skeletonOffsetXCm?: number,
@@ -152,6 +160,16 @@ export type StreamFrameCalibConfig = {
   pattern: number;
   patternBits: number;
 };
+export type StreamFramePostPackConfig = {
+  enable: boolean;
+  casEnable: boolean;
+  foveaStrength: number;
+  peripheryStrength: number;
+  foveaTop: boolean;
+  edgeFalloff?: number;
+  limitedRange: boolean;
+}
+
 export type StreamFrameCASConfig = {
   enable: boolean;
   strength: number;
@@ -177,6 +195,7 @@ export type StreamFrameConfig = {
   colorMultiplier: LinearColor;
   srgbMatrix: number[];
   cas: StreamFrameCASConfig;
+  postPack: StreamFramePostPackConfig;
   dither: boolean;
   stationaryDimming: StreamFrameDimmingConfig;
   k1: number;
@@ -194,6 +213,29 @@ export type StreamFrameConfig = {
   directRender: boolean;
   zeroCopyV3: boolean;
   nvencTap: boolean;
+  nvencBandwidthOverrideMbit: number;
+  nvencSettingsVersion: number;
+  nvencFixLevel: boolean;
+  nvencBitrateMbit: number;
+  nvencMaxQp: number;
+  nvencAqStrength: number;
+  nvencMaxBitrateHeadroomPct: number;
+  nvencVbvFrames: number;
+  nvencForceFps: number;
+  nvencBitrateScale: boolean;
+  nvencVrlinkClampMbit: number;
+  nvencPreset: number;
+  nvencPresetMerge: boolean;
+  nvencVuiFullRange: number;
+  nvencMinQp: number;
+  nvencMinQpIntra: number;
+  nvencForceCbr: boolean;
+  nvencLowDelayKfScale: number;
+  nvencVuiMatrix: number;
+  nvencVuiPrimaries: number;
+  nvencVuiTransfer: number;
+  nvencSplitMode: number;
+  nvencVerbose: boolean;
   fxaa: string;
   hitchDiag: boolean;
   deferredEviction: boolean;

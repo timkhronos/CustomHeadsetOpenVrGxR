@@ -225,6 +225,20 @@ struct StreamFrameDistortionConfig{
 	StreamFrameDisplacementMap map = {};
 };
 
+// 2026-09-05 post-pack processing on the packed transport frame (see
+// NvencPostPack.h): per-tile CAS and the limited-range remap run on the
+// 9.4 MP NV12/P010 frame right before the encoder reads it, instead of on
+// the 109 MP eye textures. requires the NVENC tap.
+struct StreamFramePostPackConfig{
+	bool enable = false;
+	bool casEnable = true;
+	double foveaStrength = 0.6;     // 0..1, the 1:1 gaze cut-out tile
+	double peripheryStrength = 0.3; // 0..1, the downscaled whole-view tile (sharpened after its downscale)
+	bool foveaTop = true;           // fovea tile is the upper of each eye's pair (from vrlink's shader); flip if the overlay says otherwise
+	double edgeFalloff = 0.12;      // fraction of the fovea tile over which sharpening ramps down to the periphery strength (seam softening)
+	bool limitedRange = false;      // Y 16..235 / C 16..240 + VUI full-range flag cleared: the decoder's well-trodden path (black floor probe)
+};
+
 struct StreamFrameCASConfig{
 	// contrast adaptive sharpening applied before encoding
 	bool enable = false;
@@ -288,26 +302,87 @@ struct GalaxyXrConfig{
 	// (only if they hold our value), returning vrlink to its own defaults.
 	// takes effect at SteamVR start.
 	bool nativeResolution = true;
-	// stream quality preset, mirroring the community Apply-Settings tiers.
-	// "default" leaves vrlink's built-in encode/bandwidth defaults (and
-	// removes any tier keys we previously wrote). the other tiers write
-	// encodeWidth / streamFormatWidth(1536, validated foveated transport
-	// maximum) / recommendedBandwidthMbit+targetBandwidth and disable the
+	// stream quality preset. "default" leaves vrlink's built-in encode/
+	// bandwidth defaults (and removes any tier keys we previously wrote).
+	// the other tiers write encodeWidth AND streamFormatWidth to the same
+	// width, plus recommendedBandwidthMbit+targetBandwidth, and disable the
 	// automatic width/bandwidth pickers:
-	//   stable  2048/1536/250   quality 2560/1536/300
-	//   high    3072/1536/300   highest 3072/1536/350 (chroma ceiling)
-	//   ultra   4032/1536/350 (above-transport source; needs Wi-Fi 7 6GHz,
-	//           watch driver_vrlink.txt for NVENC Invalid Level / buffer
+	//   stable  2048/250   quality 2560/300   high 3072/300
+	//   highest 3072/350   ultra   3584/350 (needs Wi-Fi 7 6GHz; watch
+	//           driver_vrlink.txt for NVENC Invalid Level / buffer
 	//           starvation and fall back to high)
+	// 2026-08-26: the community tool pinned streamFormatWidth at 1536 and
+	// only varied encodeWidth, but streamFormatWidth is the width vrlink
+	// actually encodes at (m_nTargetEncodeWidth tracks it) and encodeWidth
+	// alone does nothing observable, so those tiers all encoded at 1536.
 	// effective at the next SteamVR start / headset connect.
-	std::string streamQuality = "default";
-	// streamQuality == "custom": the three vrlink keys written verbatim.
-	// 2026-08-26 field: streamFormatWidth is the width vrlink actually
-	// encodes at (m_nTargetEncodeWidth tracks it); encodeWidth alone does
-	// nothing observable. bandwidth is targetBandwidth/recommendedBandwidthMbit.
+	std::string streamQuality = "balanced"; // v3: efficient|balanced|sharp|max|custom (legacy names migrate)
+	// streamQuality == "custom": customEncodeWidth is written to both width
+	// keys; bandwidth is targetBandwidth/recommendedBandwidthMbit.
+	// customStreamFormatWidth is legacy, parsed only so old settings load
+	// and so the value can be cleaned out of steamvr.vrsettings.
 	int customEncodeWidth = 3072;
-	int customStreamFormatWidth = 3072;
+	int customStreamFormatWidth = 1536; // v3: the tile width in custom mode (1536 or 2048; hard max 2048)
 	int customBandwidthMbit = 350;
+	// 2026-08-30 DEBUG (settings.json only, no GUI): 0 = streamFormatWidth
+	// tracks customEncodeWidth (normal). nonzero = write THIS value to
+	// streamFormatWidth while encodeWidth keeps customEncodeWidth: the
+	// discriminator for what encodeWidth actually is. hypothesis H1:
+	// encodeWidth = pre-foveation source sampling width, streamFormatWidth
+	// = packed transport frame width (what NVENC sees). if H1 holds, at a
+	// small fixed streamFormatWidth a higher encodeWidth sharpens the
+	// foveal box only; the tap's RegisterResource dims tell which key the
+	// registered input texture follows.
+	int customStreamFormatWidthOverride = 0;
+	// 2026-08-27 DLL archaeology (driver_vrlink.dll strings + driver_vrlink.txt):
+	// vrlink looks an unknown HMD up in a settings section named
+	// "vrlink_<modelNumber>" (Galaxy XR: vrlink_xrvst2ue) and reads
+	// recommendedRenderWidth/Height, supports10bit and the stream-format
+	// bounds (min/maxStreamFormatWidth, min/maxNonFoveatedStreamFormatWidth,
+	// nonFoveatedStreamFormatWidth) from it. with no section the log says
+	// "Using defaults as unknown headset: 1" and "Warning: HMD does not
+	// support 10bit." -> "Using 10bit mode: 0": the stream is 8-bit HEVC.
+	// this toggle writes that section. EXPERIMENTAL: key names are from
+	// the binary, the section name is inferred from a "vrlink_" literal
+	// adjacent to "[GetHmdModel] Unknown HMD Model number"; verify with a
+	// connect session ("Found settings for unknown hmd. Attempting to
+	// load." / "Using 10bit mode: 1" in driver_vrlink.txt). off removes
+	// the keys we wrote. takes effect at SteamVR start.
+	bool vrlinkHeadsetProfile = true;
+	// profile contents. maxStreamFormatWidth is the "foveated transport
+	// maximum" the community measured as 1536; we raise it so the tiers
+	// above 1536 are not clamped. 3584 = next 256-multiple above the panel.
+	int profileMaxStreamFormatWidth = 0; // v3: unused, the profile max tracks the tile width (kept so old files parse)
+	bool profileSupports10bit = false; // the client cannot decode 10-bit (09-03 run 1: ~15 fps, continuous resets)
+	// also write the global driver_vrlink.force10bit ("Warning: Driver
+	// forcing 10bit mode via 'force10bit' setting."), the belt to the
+	// profile's braces. the community tool used to set it, then removed it.
+	bool force10bit = false;
+	// vrlink in-headset diagnostics: driver_vrlink.debugRegionColoring tints
+	// the foveated transport regions, showAdvancedGraphs adds the stats
+	// overlay (RFOV %, MAX mbit, encode times). tells us whether foveated
+	// encoding is active for this HMD at all. off removes the keys if true.
+	bool vrlinkDebugOverlay = false;
+	// 2026-09-04 generic vrlink key writer (settings.json only). driver_vrlink
+	// .dll string archaeology found settings keys the GUI has no field for:
+	//   maxVideoQueueLatencyUs, backoffRecoveryCoefficient (read next to the
+	//   stream-format keys: the allocator's lateness tolerance and its
+	//   recovery rate), qualitySharpeningThresholdMbit (next to
+	//   targetBandwidth), foveationMode, asyncStartEncode, usePool,
+	//   enableTimedRetry, forceBaselineVideoFEC, gLimitMBPS, dbgSyncOff,
+	//   logFirstFrames, errorsAsFatal, watchForShaderChanges.
+	// each entry: name -> {"i":int} | {"f":float} | {"b":bool} | null
+	// (null removes the key). written into [driver_vrlink] at provider
+	// Init and on hot reload; defaults/semantics are unknown, so the
+	// driver logs each write and vrlink's own log is the oracle.
+	//   "vrlinkExtraKeys": { "maxVideoQueueLatencyUs": {"i": 20000},
+	//                        "backoffRecoveryCoefficient": {"f": 2.0} }
+	std::vector<std::tuple<std::string, char, double>> vrlinkExtraKeys; // (name, 'i'|'f'|'b'|'x'(remove), value)
+	// GUI-exposed pair of the above (the allocator's two lateness knobs).
+	// 0 = don't write (vrlink default). nonzero = written to [driver_vrlink]
+	// maxVideoQueueLatencyUs / backoffRecoveryCoefficient.
+	int vrlinkMaxVideoQueueLatencyUs = 0;
+	double vrlinkBackoffRecoveryCoefficient = 0.0;
 	// uniform scale for the controller render models. the official assets
 	// measure ~124x63mm while the physical controller tapes ~145x70mm.
 	// 2026-08-25 default 1.15 (was 1.16 on 08-24): SteamVR Home mesh overlays the shell
@@ -445,6 +520,7 @@ struct StreamFrameConfig{
 	// cost of one extra full-region pass and one extra scratch texture)
 	int fxaaMode = 0;
 	StreamFrameCASConfig cas = {};
+	StreamFramePostPackConfig postPack = {};
 	// add low amplitude noise before encoding to reduce banding in dark scenes
 	bool dither = false;
 	// ==== black floor diagnostics + fixes (GUI Debug section) ====
@@ -662,12 +738,89 @@ struct StreamFrameConfig{
 	// wall: NVENC surfaces untouched). our per-eye traffic 4x -> 2x.
 	// EXPERIMENTAL: one dedicated toggle-on test in a disposable session.
 	bool zeroCopyV3 = false;
-	// NVENC tap: OBSERVE-ONLY recon of vrlink's encoder (init params, rate
-	// control surface, registered resources). answers whether NVENC
-	// consumes the layer directly (the v3c site) and exposes the parameter
-	// surface for the black-floor work. modifies nothing. enable BEFORE
-	// launching SteamVR so the encoder creation is not missed.
-	bool nvencTap = false;
+	// NVENC tap (ACTIVE since 2026-08-27, see NvencTap.h). hooks vrlink's
+	// encoder init/reconfigure. every override is retried with vrlink's
+	// own params on failure, so worst case is stock behaviour + a log line.
+	// enable BEFORE launching SteamVR (the hook must precede connect).
+	bool nvencTap = true; // v3 master switch: off = stock streamer, tiers write only width + bandwidth
+	// level=AUTOSELECT / tier=HIGH: cures "NVENC: Invalid Level" (every
+	// bitrate reconfigure rejected at >=3072-wide frames)
+	bool nvencFixLevel = true;
+	// 0 = leave. else replaces the encoder's average bitrate (Mbit/s) and
+	// sets max = 1.15x; lifts vrlink's internal 350 Mbit/s clamp
+	int nvencBitrateMbit = 0; // v3: DEBUG "encoder bitrate (separate)": 0 = same as the pacer bandwidth
+	// v3 Advanced: 0 = the tier's (or custom) bandwidth drives both the pacer
+	// and the encoder; nonzero overrides both at once
+	int nvencBandwidthOverrideMbit = 0;
+	// v3 settings-schema version. < 3 in a loaded file = pre-v3 encoder
+	// settings: ConfigLoader applies the v3 encoder defaults over them
+	// (AQ off, CBR on, ...) and logs it. The GUI writes 3.
+	int nvencSettingsVersion = 0;
+	// 0 = leave. else QP ceiling (1..51): blocks cannot be quantized coarser
+	// than this; black-floor / dark-gradient lever. try 30..36.
+	int nvencMaxQp = 0;
+	// 0 = leave. else spatial AQ strength 1..15
+	int nvencAqStrength = 0; // GRAVEYARD: any spatial AQ makes nvEncEncodePicture block 4-6 ms on these frames (X3); migration forces 0
+	// 0 = leave. else QP floor: stops reset-IDR frames ballooning past
+	// vrlink's ~2 MB send limit (G2: 3.5-5.4 MB at QP 8). try 14-18.
+	int nvencMinQp = 0;
+	// 0 = same as nvencMinQp. else intra-frame floor (vrlink send limit is
+	// exactly 2 MB/frame; IDR at QP 16 = 2.3 MB, at QP 24 = 1.45 MB)
+	int nvencMinQpIntra = 0;
+	// CBR + low-delay key-frame scale: VBV honoured on key frames
+	bool nvencForceCbr = true; // v3 default (X2, 350/450 runs); spatial AQ, not CBR, was the serializer
+	// with Force CBR: reset-IDR budget as a multiple of a P frame (1..4).
+	// 1 = one frame budget (soft IDR, QP 34-48 in the R runs); 2 = two,
+	// still under vbvFrames=2. see NvencTapConfig::lowDelayKfScale
+	int nvencLowDelayKfScale = 2;
+	// peak/avg headroom percent (vrlink: 15). 0 flattens frames; the
+	// 500 Mbit run died on "Packet too big" (one IDR frame over vrlink's
+	// send limit)
+	int nvencMaxBitrateHeadroomPct = 0; // inert under CBR (max = avg); 0 measured safe under VBR
+	// 0 = leave. else vbv = avg/fps * N frames (bounds single-frame size);
+	// fps = nvencForceFps or the nominal 90, never vrlink's per-call value
+	int nvencVbvFrames = 2; // v3 default: caps vegetation peaks and reset IDRs at ~2 frame budgets
+	// 2026-09-03 runs 1/2: vrlink reconfigures before every frame with an
+	// instantaneous frameRateNum (90..15) that collapses while hitching;
+	// CBR budget and fps-derived VBV are avg/fps, so a hitch ballooned the
+	// reset IDR (7 MB at "15 fps") -> Packet too big -> reset -> hitch: a
+	// feedback loop. 0 = leave. else force N/1 on init + every reconfigure.
+	// 90 is the correct value for this HMD.
+	int nvencForceFps = 90;
+	// scale vrlink's bitrate request by bitrate/350 instead of replacing
+	// it, so its own congestion backoff (30 Mbit during throttle events)
+	// survives the override. off = replace outright (pre-09-03 behaviour).
+	bool nvencBitrateScale = true;
+	// vrlink's own encoder ceiling (reference for the scaling), settings.json only
+	int nvencVrlinkClampMbit = 350;
+	// 0 = leave. 1..7 = NVENC preset P1..P7 (vrlink: P2 + ultra-low-latency
+	// tuning, no AQ, no lookahead). the "VD sets better defaults" lever.
+	int nvencPreset = 0; // v3: 0 = AUTO by NVENC engine count (3+ -> P7, 2 -> P5, 1 -> P4), 1..7 override
+	// 2026-08-30: with an explicit encodeConfig the presetGUID is advisory
+	// (nvEncodeAPI.h: it "will not override the custom config structure"),
+	// so the GUID swap alone is a partial preset change. with this on the
+	// tap queries nvEncGetEncodePresetConfigEx for the canonical config of
+	// the target preset at vrlink's own tuning and adopts multipass,
+	// temporal AQ, spatial AQ (only if no manual/tier AQ is set) and the
+	// HEVC DPB ref count; the vrlink-vs-preset field diff is logged once.
+	// off = old behaviour (GUID swap only), for A/B.
+	bool nvencPresetMerge = true;
+	// -1 leave, 0/1 force the HEVC VUI full-range flag (black-floor probe)
+	int nvencVuiFullRange = -1;
+	// -1 leave; else force VUI matrix / primaries / transfer (client honours
+	// VUI per run L; stock matrix=0 identity is the black-floor suspect.
+	// probes: matrix 1, primaries 1, transfer 1 or 13)
+	int nvencVuiMatrix = -1;
+	int nvencVuiPrimaries = -1;
+	int nvencVuiTransfer = -1;
+	// 2026-09-04 split-frame encoding experiment (see NvencTapConfig::
+	// splitMode). 0 = leave (driver implicit: P1..P4 only). 1 = force,
+	// driver picks strips. 2/3/4 = forced strip count (5090 has 3 NVENCs).
+	// 15 = disable split (probe). requires passing 12.1-versioned structs
+	// into vrlink's 11.1 session; rejection is logged and latched off.
+	int nvencSplitMode = 1; // v3 default: driver-chosen strips (RUN6/X2); implies the 12.1 session upgrade
+	// log every reconfigure + hex dumps
+	bool nvencVerbose = false;
 	// 5 = kalmanCAM ("kalmanCAM"): mode 4 with the fast magnitude channel
 	// replaced by a constant-acceleration (Singer) estimator — the
 	// low-risk arm of the CA experiment (calm direction untouched).

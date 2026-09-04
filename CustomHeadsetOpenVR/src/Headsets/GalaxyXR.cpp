@@ -1,6 +1,9 @@
 #include "GalaxyXR.h"
 #include <algorithm>
+#include <vector>
+#include <chrono>
 #include "../Config/ConfigLoader.h"
+#include "../Config/StreamTiers.h"
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -51,23 +54,15 @@ static std::string ExpectedReadyIcon(const std::string &prefix){
 static const int kGalaxyXrRenderWidth = 3552;
 static const int kGalaxyXrRenderHeight = 3840;
 
-struct StreamTier { const char* name; int encodeWidth; int bandwidth; };
-// values from the community Apply-Settings tool (streamFormatWidth fixed 1536)
-static const StreamTier kStreamTiers[] = {
-	{"stable", 2048, 250}, {"quality", 2560, 300}, {"high", 3072, 300},
-	{"highest", 3072, 350}, {"ultra", 4032, 350},
-};
+// tier table lives in Config/StreamTiers.h (shared with the NVENC tap
+// resolution in FrameProcessor)
+static const std::initializer_list<int> kAllTierWidths = {1536, 2048, 2560, 3072, 3200, 3584, 4032};
+static const std::initializer_list<int> kAllTierBandwidths = {250, 300, 350, 400, 450, 500};
 
-static const StreamTier* FindTier(const std::string &name){
-	for(const auto &t : kStreamTiers){
-		if(name == t.name){ return &t; }
-	}
-	return nullptr;
-}
 
 // remove a vrlink int key only when it holds a value we could have written,
 // so user- or tool-owned values are never clobbered
-static void RemoveIntIfOurs(const char* key, std::initializer_list<int> ourValues){
+static void RemoveIntIfOurs(const char* key, const std::vector<int> &ourValues){
 	vr::EVRSettingsError err = vr::VRSettingsError_None;
 	int32_t v = vr::VRSettings()->GetInt32("driver_vrlink", key, &err);
 	if(err != vr::VRSettingsError_None){ return; }
@@ -79,39 +74,69 @@ static void RemoveIntIfOurs(const char* key, std::initializer_list<int> ourValue
 	}
 }
 
+// write encodeWidth + streamFormatWidth (always equal, see kStreamTiers) and
+// the bandwidth pair, with vrlink's automatic pickers off
+struct VrlinkPathProbe {
+	bool done = false;
+	double lastAttempt = 0;
+};
+static VrlinkPathProbe pathProbe;
+
+static void WriteStreamKeys(int width, int bandwidth, int streamFormatWidth = 0){
+	if(streamFormatWidth <= 0){ streamFormatWidth = width; }
+	vr::VRSettings()->SetInt32("driver_vrlink", "encodeWidth", width);
+	vr::VRSettings()->SetInt32("driver_vrlink", "streamFormatWidth", streamFormatWidth);
+	vr::VRSettings()->SetBool("driver_vrlink", "automaticStreamFormatWidth", false);
+	vr::VRSettings()->SetBool("driver_vrlink", "automaticBandwidth", false);
+	vr::VRSettings()->SetInt32("driver_vrlink", "recommendedBandwidthMbit", bandwidth);
+	vr::VRSettings()->SetInt32("driver_vrlink", "targetBandwidth", bandwidth);
+}
+
+// v3: the effective tile width and bandwidth for the current mode. encode
+// width is a constant (inert in foveated mode); the Advanced bandwidth
+// override wins over tier/custom and drives pacer AND encoder.
+int GalaxyXR_EffectiveTileWidth(){
+	const auto &g = driverConfig.galaxyXr;
+	const GxrStreamTier* tier = FindGxrStreamTier(g.streamQuality);
+	int w = g.streamQuality == "custom" ? g.customStreamFormatWidth : (tier ? tier->width : 1536);
+	return std::max(512, std::min(2048, w));
+}
+int GalaxyXR_EffectiveBandwidthMbit(){
+	const auto &g = driverConfig.galaxyXr;
+	if(driverConfig.streamFrame.nvencBandwidthOverrideMbit > 0){ return std::max(10, std::min(2000, driverConfig.streamFrame.nvencBandwidthOverrideMbit)); }
+	const GxrStreamTier* tier = FindGxrStreamTier(g.streamQuality);
+	int bw = g.streamQuality == "custom" ? g.customBandwidthMbit : (tier ? tier->bandwidthMbit : 350);
+	return std::max(10, std::min(2000, bw));
+}
+
 static void ApplyStreamQualitySetting(){
-	const StreamTier* tier = FindTier(driverConfig.galaxyXr.streamQuality);
-	if(driverConfig.galaxyXr.streamQuality == "custom"){
-		// verbatim user values; clamped only to keep vrlink from choking on
-		// nonsense (it rejects widths it cannot allocate and 0 bandwidth)
-		int ew = std::max(512, std::min(8192, driverConfig.galaxyXr.customEncodeWidth));
-		int sfw = std::max(512, std::min(8192, driverConfig.galaxyXr.customStreamFormatWidth));
-		int bw = std::max(10, std::min(2000, driverConfig.galaxyXr.customBandwidthMbit));
-		vr::VRSettings()->SetInt32("driver_vrlink", "encodeWidth", ew);
-		vr::VRSettings()->SetInt32("driver_vrlink", "streamFormatWidth", sfw);
-		vr::VRSettings()->SetBool("driver_vrlink", "automaticStreamFormatWidth", false);
-		vr::VRSettings()->SetBool("driver_vrlink", "automaticBandwidth", false);
-		vr::VRSettings()->SetInt32("driver_vrlink", "recommendedBandwidthMbit", bw);
-		vr::VRSettings()->SetInt32("driver_vrlink", "targetBandwidth", bw);
-		DriverLog("GalaxyXR: stream quality 'custom' (encodeWidth %d, streamFormatWidth %d, %d Mbit/s; effective next start/connect)", ew, sfw, bw);
-	}else if(tier){
-		vr::VRSettings()->SetInt32("driver_vrlink", "encodeWidth", tier->encodeWidth);
-		vr::VRSettings()->SetInt32("driver_vrlink", "streamFormatWidth", 1536);
-		vr::VRSettings()->SetBool("driver_vrlink", "automaticStreamFormatWidth", false);
-		vr::VRSettings()->SetBool("driver_vrlink", "automaticBandwidth", false);
-		vr::VRSettings()->SetInt32("driver_vrlink", "recommendedBandwidthMbit", tier->bandwidth);
-		vr::VRSettings()->SetInt32("driver_vrlink", "targetBandwidth", tier->bandwidth);
-		DriverLog("GalaxyXR: stream quality '%s' (encodeWidth %d, streamFormatWidth 1536, %d Mbit/s; effective next start/connect)",
-			tier->name, tier->encodeWidth, tier->bandwidth);
+	pathProbe.done = false;
+	const auto &g = driverConfig.galaxyXr;
+	const GxrStreamTier* tier = FindGxrStreamTier(g.streamQuality);
+	if(g.streamQuality == "custom" || tier){
+		int encodeW = std::max(512, std::min(8192, g.customEncodeWidth > 0 ? g.customEncodeWidth : 3072));
+		int tile = GalaxyXR_EffectiveTileWidth();
+		int bw = GalaxyXR_EffectiveBandwidthMbit();
+		WriteStreamKeys(encodeW, bw, tile);
+		DriverLog("GalaxyXR: stream quality '%s'%s: tile (streamFormatWidth) %d, %d Mbit/s%s, encodeWidth %d (inert); encoder settings are global (see NvencTap); effective next start/connect",
+			tier ? tier->name : "custom", (tier && tier->name != g.streamQuality) ? " (mapped from legacy name)" : "", tile, bw,
+			driverConfig.streamFrame.nvencBandwidthOverrideMbit > 0 ? " (Advanced bandwidth override)" : "", encodeW);
 	}else{
 		// default (or unknown): remove tier keys we own so vrlink built-in
-		// defaults apply, matching the community tool's Default mode
-		// the custom values are included so leaving custom mode cleans up too
-		const auto &g = driverConfig.galaxyXr;
-		RemoveIntIfOurs("encodeWidth", {2048, 2560, 3072, 4032, g.customEncodeWidth});
-		RemoveIntIfOurs("streamFormatWidth", {1536, g.customStreamFormatWidth});
-		RemoveIntIfOurs("recommendedBandwidthMbit", {250, 300, 350, g.customBandwidthMbit});
-		RemoveIntIfOurs("targetBandwidth", {250, 300, 350, g.customBandwidthMbit});
+		// defaults apply, matching the community tool's Default mode.
+		// custom values (current and legacy) are included so leaving custom
+		// mode cleans up too
+		std::vector<int> widths(kAllTierWidths);
+		widths.push_back(g.customEncodeWidth);
+		widths.push_back(g.customStreamFormatWidth);
+		widths.push_back(3072);
+		std::vector<int> bws(kAllTierBandwidths);
+		bws.push_back(g.customBandwidthMbit);
+		bws.push_back(driverConfig.streamFrame.nvencBandwidthOverrideMbit);
+		RemoveIntIfOurs("encodeWidth", widths);
+		RemoveIntIfOurs("streamFormatWidth", widths);
+		RemoveIntIfOurs("recommendedBandwidthMbit", bws);
+		RemoveIntIfOurs("targetBandwidth", bws);
 		vr::EVRSettingsError err = vr::VRSettingsError_None;
 		bool a = vr::VRSettings()->GetBool("driver_vrlink", "automaticStreamFormatWidth", &err);
 		if(err == vr::VRSettingsError_None && !a){
@@ -123,6 +148,223 @@ static void ApplyStreamQualitySetting(){
 			vr::VRSettings()->RemoveKeyInSection("driver_vrlink", "automaticBandwidth");
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// vrlink runtime path recon. vrlink publishes (not reads) a handful of values
+// under /driver_vrlink/ that the SteamVR settings UI binds to:
+//   min_stream_format_width / max_stream_format_width  (bounds of the
+//       "foveated stream format width" slider, step 64) - this is the
+//       "1536 foveated transport maximum" the community observed; it is a
+//       cap the driver reports, not a settings key anyone writes
+//   foveation_enabled / effective_foveated_resolution
+//   network_tested_bandwidth (detent on the bandwidth slider)
+// values exist only once the headset is connected, so this polls until they
+// resolve and logs them once. compare max_stream_format_width against the
+// streamFormatWidth we wrote to see whether the request is being clamped.
+// ---------------------------------------------------------------------------
+// IVRPaths is not in the vendored openvr_driver.h. The probe is opt-in:
+// define GXR_VRPATHS_PROBE to build it against this local declaration of
+// IVRPaths_001 (layout from the upstream openvr_driver.h; unverified here).
+#ifdef GXR_VRPATHS_PROBE
+namespace gxrpaths {
+	typedef uint64_t PathHandle_t;
+	struct PathRead_t {
+		PathHandle_t ulPath;
+		void *pvBuffer;
+		uint32_t unBufferSize;
+		vr::PropertyTypeTag_t unTag;
+		uint32_t unRequiredBufferSize;
+		vr::ETrackedPropertyError eError;
+		const char *pszPath;
+	};
+	struct PathWrite_t;
+	class IVRPaths {
+	public:
+		virtual vr::ETrackedPropertyError ReadPathBatch(vr::PropertyContainerHandle_t ulRootHandle, PathRead_t *pBatch, uint32_t unBatchEntryCount) = 0;
+		virtual vr::ETrackedPropertyError WritePathBatch(vr::PropertyContainerHandle_t ulRootHandle, PathWrite_t *pBatch, uint32_t unBatchEntryCount) = 0;
+		virtual vr::ETrackedPropertyError StringToHandle(PathHandle_t *pHandle, char *pchPath) = 0;
+		virtual vr::ETrackedPropertyError HandleToString(PathHandle_t pHandle, char *pchBuffer, uint32_t unBufferSize, uint32_t *punBufferSizeUsed) = 0;
+	};
+	static const char* const IVRPaths_Version = "IVRPaths_001";
+	static const vr::PropertyContainerHandle_t kRoot = 1; // k_ulRootHandle upstream
+}
+
+template<typename T>
+static bool ReadPathAs(gxrpaths::IVRPaths* paths, gxrpaths::PathHandle_t h, vr::PropertyTypeTag_t tag, T &v){
+	gxrpaths::PathRead_t r{}; r.ulPath = h; r.unTag = tag; r.pvBuffer = &v; r.unBufferSize = sizeof(v);
+	return paths->ReadPathBatch(gxrpaths::kRoot, &r, 1) == vr::TrackedProp_Success && r.eError == vr::TrackedProp_Success;
+}
+
+static bool ReadVrlinkPath(gxrpaths::IVRPaths* paths, const char* path, std::string &out){
+	gxrpaths::PathHandle_t h = 0;
+	std::string mutablePath = path;
+	if(paths->StringToHandle(&h, &mutablePath[0]) != vr::TrackedProp_Success){ return false; }
+	char buf[64];
+	{ int32_t v = 0; if(ReadPathAs(paths, h, vr::k_unInt32PropertyTag, v)){ out = std::to_string(v); return true; } }
+	{ double v = 0; if(ReadPathAs(paths, h, vr::k_unDoublePropertyTag, v)){ snprintf(buf, sizeof(buf), "%g", v); out = buf; return true; } }
+	{ float v = 0; if(ReadPathAs(paths, h, vr::k_unFloatPropertyTag, v)){ snprintf(buf, sizeof(buf), "%g", v); out = buf; return true; } }
+	{ bool v = false; if(ReadPathAs(paths, h, vr::k_unBoolPropertyTag, v)){ out = v ? "true" : "false"; return true; } }
+	{ char v[128] = {}; if(ReadPathAs(paths, h, vr::k_unStringPropertyTag, v)){ out = v; return true; } }
+	return false;
+}
+
+// call every frame; self-throttled. resets when stream settings change so a
+// reconnect re-logs the (possibly new) cap.
+static void ProbeVrlinkPaths(){
+	if(pathProbe.done){ return; }
+	double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+	if(now - pathProbe.lastAttempt < 3.0){ return; }
+	pathProbe.lastAttempt = now;
+	vr::EVRInitError ie = vr::VRInitError_None;
+	auto* paths = (gxrpaths::IVRPaths*)vr::VRDriverContext()->GetGenericInterface(gxrpaths::IVRPaths_Version, &ie);
+	if(!paths || ie != vr::VRInitError_None){ return; }
+	static const char* kPaths[] = {
+		"/driver_vrlink/min_stream_format_width", "/driver_vrlink/max_stream_format_width",
+		"/driver_vrlink/foveation_enabled", "/driver_vrlink/effective_foveated_resolution",
+		"/driver_vrlink/network_tested_bandwidth", "/driver_vrlink/client_version",
+	};
+	std::string line; int got = 0;
+	for(const char* pth : kPaths){
+		std::string v;
+		if(ReadVrlinkPath(paths, pth, v)){ ++got; line += std::string(pth + 15) + "=" + v + " "; }
+	}
+	if(line.find("max_stream_format_width=") == std::string::npos){ return; }
+	vr::EVRSettingsError se = vr::VRSettingsError_None;
+	int32_t sfw = vr::VRSettings()->GetInt32("driver_vrlink", "streamFormatWidth", &se);
+	DriverLog("GalaxyXR: vrlink runtime paths (%d/6): %s| our streamFormatWidth=%d", got, line.c_str(),
+		se == vr::VRSettingsError_None ? sfw : -1);
+	pathProbe.done = true;
+}
+#else
+static void ProbeVrlinkPaths(){}
+#endif
+
+// ---------------------------------------------------------------------------
+// vrlink per-headset profile section ("vrlink_<modelNumber>"), see
+// GalaxyXrConfig::vrlinkHeadsetProfile. only writes on difference; on
+// removal only removes keys still holding our values.
+// ---------------------------------------------------------------------------
+static void SetInt32IfDifferent(const char* section, const char* key, int32_t v){
+	vr::EVRSettingsError err = vr::VRSettingsError_None;
+	int32_t cur = vr::VRSettings()->GetInt32(section, key, &err);
+	if(err != vr::VRSettingsError_None || cur != v){ vr::VRSettings()->SetInt32(section, key, v); }
+}
+static void SetBoolIfDifferent(const char* section, const char* key, bool v){
+	vr::EVRSettingsError err = vr::VRSettingsError_None;
+	bool cur = vr::VRSettings()->GetBool(section, key, &err);
+	if(err != vr::VRSettingsError_None || cur != v){ vr::VRSettings()->SetBool(section, key, v); }
+}
+static void RemoveBoolIfOurs(const char* section, const char* key, bool ours){
+	vr::EVRSettingsError err = vr::VRSettingsError_None;
+	bool cur = vr::VRSettings()->GetBool(section, key, &err);
+	if(err == vr::VRSettingsError_None && cur == ours){ vr::VRSettings()->RemoveKeyInSection(section, key); }
+}
+static void RemoveIntIfOursIn(const char* section, const char* key, const std::vector<int> &ours){
+	vr::EVRSettingsError err = vr::VRSettingsError_None;
+	int32_t cur = vr::VRSettings()->GetInt32(section, key, &err);
+	if(err != vr::VRSettingsError_None){ return; }
+	for(int o : ours){ if(cur == o){ vr::VRSettings()->RemoveKeyInSection(section, key); return; } }
+}
+
+// vrlink's native model number for the Galaxy XR ("ModelNumber xrvst2ue" in
+// vrserver.txt). the property container is still empty when our Activate
+// runs (vrlink stamps it afterwards), so this is the fallback for the
+// section name.
+static const char* kGalaxyXrVrlinkModelNumber = "xrvst2ue";
+
+static void ApplyHeadsetProfileSetting(const std::string &modelNumberIn){
+	const auto &g = driverConfig.galaxyXr;
+	std::string modelNumber = modelNumberIn.empty() ? kGalaxyXrVrlinkModelNumber : modelNumberIn;
+	if(modelNumberIn.empty()){
+		DriverLog("GalaxyXR: headset profile: model number not yet in the container, using vrlink's native '%s'", kGalaxyXrVrlinkModelNumber);
+	}
+	// v3: the profile's max tracks the tile we write (no separate field);
+	// 2048 is the hard tile ceiling anyway (4 stacked tiles, 8192 max height)
+	int maxSfw = std::max(1024, GalaxyXR_EffectiveTileWidth());
+	DriverLog("GalaxyXR: headset profile apply: section vrlink_%s profile=%d maxSfw=%d (tracks tile) supports10bit=%d overlay=%d",
+		modelNumber.c_str(), (int)g.vrlinkHeadsetProfile, maxSfw, (int)g.profileSupports10bit, (int)g.vrlinkDebugOverlay);
+	std::string section = "vrlink_" + modelNumber;
+	const char* sec = section.c_str();
+	if(g.vrlinkHeadsetProfile){
+		SetInt32IfDifferent(sec, "recommendedRenderWidth", kGalaxyXrRenderWidth);
+		SetInt32IfDifferent(sec, "recommendedRenderHeight", kGalaxyXrRenderHeight);
+		SetBoolIfDifferent(sec, "supports10bit", g.profileSupports10bit);
+		SetInt32IfDifferent(sec, "minStreamFormatWidth", 1024);
+		SetInt32IfDifferent(sec, "maxStreamFormatWidth", maxSfw);
+		SetInt32IfDifferent(sec, "minNonFoveatedStreamFormatWidth", 1024);
+		SetInt32IfDifferent(sec, "maxNonFoveatedStreamFormatWidth", maxSfw);
+		DriverLog("GalaxyXR: wrote vrlink headset profile [%s] (render %dx%d, supports10bit %d, streamFormatWidth 1024..%d; effective at SteamVR start). "
+			"Verify in driver_vrlink.txt: 'Found settings for unknown hmd' and 'Using 10bit mode'.",
+			sec, kGalaxyXrRenderWidth, kGalaxyXrRenderHeight, (int)g.profileSupports10bit, maxSfw);
+	}else{
+		RemoveIntIfOursIn(sec, "recommendedRenderWidth", {kGalaxyXrRenderWidth});
+		RemoveIntIfOursIn(sec, "recommendedRenderHeight", {kGalaxyXrRenderHeight});
+		RemoveBoolIfOurs(sec, "supports10bit", true);
+		RemoveBoolIfOurs(sec, "supports10bit", false);
+		RemoveIntIfOursIn(sec, "minStreamFormatWidth", {1024});
+		RemoveIntIfOursIn(sec, "maxStreamFormatWidth", {maxSfw, 1536, 2048, 3072, 3200, 3584, 4096});
+		RemoveIntIfOursIn(sec, "minNonFoveatedStreamFormatWidth", {1024});
+		RemoveIntIfOursIn(sec, "maxNonFoveatedStreamFormatWidth", {maxSfw, 1536, 2048, 3072, 3200, 3584, 4096});
+	}
+	// v3: force10bit retired (the client cannot decode 10-bit); clean up a
+	// value an older build may have left behind
+	RemoveBoolIfOurs("driver_vrlink", "force10bit", true);
+	if(g.vrlinkDebugOverlay){
+		SetBoolIfDifferent("driver_vrlink", "debugRegionColoring", true);
+		SetBoolIfDifferent("driver_vrlink", "showAdvancedGraphs", true);
+		DriverLog("GalaxyXR: wrote driver_vrlink.debugRegionColoring/showAdvancedGraphs = true (effective at next connect)");
+	}else{
+		RemoveBoolIfOurs("driver_vrlink", "debugRegionColoring", true);
+		RemoveBoolIfOurs("driver_vrlink", "showAdvancedGraphs", true);
+	}
+}
+
+// 2026-09-03: vrlink reads steamvr.vrsettings during ITS OWN init, ~3 ms
+// before our HMD shim's Activate runs (run 1: "Using defaults as unknown
+// headset" 20:18:25.893, our profile write 25.896). so a connect always ran
+// on the PREVIOUS session's stream/profile keys; run 1's first connect went
+// 10-bit from a stale supports10bit=true. this is called from the device
+// provider's Init, long before vrlink's HMD comes up, with vrlink's native
+// model number as the section name. the Activate-time calls remain as the
+// hot-reload path (they only write on difference).
+// generic [driver_vrlink] key writer for the archaeology keys, see
+// GalaxyXrConfig::vrlinkExtraKeys. logs every write; vrlink's log is the
+// oracle for whether a key is read at all.
+static void ApplyVrlinkExtraKeys(){
+	const auto &g = driverConfig.galaxyXr;
+	vr::EVRSettingsError rerr = vr::VRSettingsError_None;
+	if(g.vrlinkMaxVideoQueueLatencyUs > 0){
+		vr::VRSettings()->SetInt32("driver_vrlink", "maxVideoQueueLatencyUs", g.vrlinkMaxVideoQueueLatencyUs);
+		DriverLog("GalaxyXR: vrlink maxVideoQueueLatencyUs = %d", g.vrlinkMaxVideoQueueLatencyUs);
+	}else{
+		vr::VRSettings()->RemoveKeyInSection("driver_vrlink", "maxVideoQueueLatencyUs", &rerr);
+	}
+	if(g.vrlinkBackoffRecoveryCoefficient > 0.0){
+		vr::VRSettings()->SetFloat("driver_vrlink", "backoffRecoveryCoefficient", (float)g.vrlinkBackoffRecoveryCoefficient);
+		DriverLog("GalaxyXR: vrlink backoffRecoveryCoefficient = %g", g.vrlinkBackoffRecoveryCoefficient);
+	}else{
+		vr::VRSettings()->RemoveKeyInSection("driver_vrlink", "backoffRecoveryCoefficient", &rerr);
+	}
+	for(const auto &e : driverConfig.galaxyXr.vrlinkExtraKeys){
+		const std::string &name = std::get<0>(e); char kind = std::get<1>(e); double v = std::get<2>(e);
+		if(name.empty()){ continue; }
+		vr::EVRSettingsError err = vr::VRSettingsError_None;
+		switch(kind){
+			case 'i': vr::VRSettings()->SetInt32("driver_vrlink", name.c_str(), (int32_t)v); DriverLog("GalaxyXR: vrlink extra key %s = %d (int)", name.c_str(), (int)v); break;
+			case 'f': vr::VRSettings()->SetFloat("driver_vrlink", name.c_str(), (float)v); DriverLog("GalaxyXR: vrlink extra key %s = %g (float)", name.c_str(), v); break;
+			case 'b': vr::VRSettings()->SetBool("driver_vrlink", name.c_str(), v != 0.0); DriverLog("GalaxyXR: vrlink extra key %s = %s (bool)", name.c_str(), v != 0.0 ? "true" : "false"); break;
+			case 'x': vr::VRSettings()->RemoveKeyInSection("driver_vrlink", name.c_str(), &err); DriverLog("GalaxyXR: vrlink extra key %s removed (%d)", name.c_str(), (int)err); break;
+			default: break;
+		}
+	}
+}
+
+void GalaxyXR_EarlyApplyVrlinkSettings(){
+	DriverLog("GalaxyXR: early vrlink settings apply (provider Init, before vrlink reads steamvr.vrsettings)");
+	ApplyStreamQualitySetting();
+	ApplyHeadsetProfileSetting("");
+	ApplyVrlinkExtraKeys();
 }
 
 // write or remove the global vrlink render override per config. safe to call
@@ -194,10 +436,18 @@ void GalaxyXRHmdShim::PosTrackedDeviceActivate(uint32_t &unObjectId, vr::EVRInit
 	ApplyNativeResolutionSetting();
 	appliedNativeResolution = driverConfig.galaxyXr.nativeResolution;
 	ApplyStreamQualitySetting();
+	ApplyHeadsetProfileSetting(origModelNumber);
+	appliedHeadsetProfile = driverConfig.galaxyXr.vrlinkHeadsetProfile;
+	appliedProfile10bit = driverConfig.galaxyXr.profileSupports10bit;
+	appliedBandwidthOverride = driverConfig.streamFrame.nvencBandwidthOverrideMbit;
+	appliedDebugOverlay = driverConfig.galaxyXr.vrlinkDebugOverlay;
 	appliedStreamQuality = driverConfig.galaxyXr.streamQuality;
 	appliedCustomEncodeWidth = driverConfig.galaxyXr.customEncodeWidth;
 	appliedCustomStreamFormatWidth = driverConfig.galaxyXr.customStreamFormatWidth;
 	appliedCustomBandwidthMbit = driverConfig.galaxyXr.customBandwidthMbit;
+	appliedProfileMaxSfw = GalaxyXR_EffectiveTileWidth();
+	appliedExtraKeys = driverConfig.galaxyXr.vrlinkExtraKeys;
+	appliedMaxVqLat = driverConfig.galaxyXr.vrlinkMaxVideoQueueLatencyUs; appliedBackoffCoef = driverConfig.galaxyXr.vrlinkBackoffRecoveryCoefficient;
 }
 
 void GalaxyXRHmdShim::ApplyIdentity(){
@@ -233,6 +483,7 @@ bool GalaxyXRHmdShim::PreTrackedDeviceDeactivate(){
 }
 
 void GalaxyXRHmdShim::RunFrame(){
+	if(active){ ProbeVrlinkPaths(); }
 	// config hot-reload: apply/remove the resolution override on toggle flips
 	if(active && driverConfig.galaxyXr.nativeResolution != appliedNativeResolution){
 		appliedNativeResolution = driverConfig.galaxyXr.nativeResolution;
@@ -240,13 +491,32 @@ void GalaxyXRHmdShim::RunFrame(){
 	}
 	{
 		const auto &g = driverConfig.galaxyXr;
+		// v3: the profile's max width tracks the tile, so a stream change
+		// re-applies the profile too
+		int tileNow = GalaxyXR_EffectiveTileWidth();
+		if(active && (g.vrlinkHeadsetProfile != appliedHeadsetProfile || tileNow != appliedProfileMaxSfw
+				|| g.profileSupports10bit != appliedProfile10bit
+				|| g.vrlinkDebugOverlay != appliedDebugOverlay)){
+			appliedDebugOverlay = g.vrlinkDebugOverlay;
+			appliedHeadsetProfile = g.vrlinkHeadsetProfile;
+			appliedProfileMaxSfw = tileNow;
+			appliedProfile10bit = g.profileSupports10bit;
+			ApplyHeadsetProfileSetting(origModelNumber);
+		}
+		if(active && (g.vrlinkExtraKeys != appliedExtraKeys || g.vrlinkMaxVideoQueueLatencyUs != appliedMaxVqLat
+				|| g.vrlinkBackoffRecoveryCoefficient != appliedBackoffCoef)){
+			appliedExtraKeys = g.vrlinkExtraKeys; appliedMaxVqLat = g.vrlinkMaxVideoQueueLatencyUs; appliedBackoffCoef = g.vrlinkBackoffRecoveryCoefficient;
+			ApplyVrlinkExtraKeys();
+		}
 		bool customChanged = g.streamQuality == "custom" && (g.customEncodeWidth != appliedCustomEncodeWidth
 			|| g.customStreamFormatWidth != appliedCustomStreamFormatWidth || g.customBandwidthMbit != appliedCustomBandwidthMbit);
-		if(active && (g.streamQuality != appliedStreamQuality || customChanged)){
+		int bwOverride = driverConfig.streamFrame.nvencBandwidthOverrideMbit;
+		if(active && (g.streamQuality != appliedStreamQuality || customChanged || bwOverride != appliedBandwidthOverride)){
 			appliedStreamQuality = g.streamQuality;
 			appliedCustomEncodeWidth = g.customEncodeWidth;
 			appliedCustomStreamFormatWidth = g.customStreamFormatWidth;
 			appliedCustomBandwidthMbit = g.customBandwidthMbit;
+			appliedBandwidthOverride = bwOverride;
 			ApplyStreamQualitySetting();
 		}
 	}

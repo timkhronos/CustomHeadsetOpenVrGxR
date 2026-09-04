@@ -5,6 +5,8 @@
 #include "EyeTrackingTap.h"
 #include "CompositorPlugin.h"
 #include "HidModifier.h"
+#include "NvencTap.h"
+#include "../Config/StreamTiers.h"
 
 #include "Hooking/InterfaceHookInjector.h"
 
@@ -81,6 +83,12 @@ vr::EVRInitError CustomHeadsetDeviceProvider::Init(vr::IVRDriverContext *pDriver
 	WriteHasBeenRunSetting(driverName.c_str());
 	
 	driverConfigLoader.Start();
+	// vrlink reads its stream/profile keys from steamvr.vrsettings during
+	// its own init, before any HMD Activate; write ours now so the FIRST
+	// connect of a session already runs the current config (09-03 race)
+	if(driverConfig.galaxyXr.nativeIdentity){
+		GalaxyXR_EarlyApplyVrlinkSettings();
+	}
 	// inject hooks into functions
 	InjectHooks(this, pDriverContext);
 	hidModifier.InjectHooks();
@@ -140,6 +148,12 @@ void DebugEventLog(const vr::VREvent_t& vrevent){
 }
 
 void CustomHeadsetDeviceProvider::RunFrame(){
+	// NVENC tap must be hooked before vrlink creates its encoder at headset
+	// connect; RunFrame ticks from driver start, long before that. (the
+	// frame-path install site only runs once frames flow = too late.)
+	if(driverConfig.streamFrame.nvencTap || FindGxrStreamTier(driverConfig.galaxyXr.streamQuality) != nullptr){
+		NvencTap::Get().TryInstall();
+	}
 	// when locked out by the vendor-neutral driver nothing was initialized, so do nothing
 	if(lockedOut){
 		return;

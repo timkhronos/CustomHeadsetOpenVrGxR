@@ -28,7 +28,9 @@
     <ClInclude Include="src\Driver\FrameProcessor.h" />
     <ClInclude Include="src\Driver\ReconLogger.h" />
     <ClInclude Include="src\Driver\ZeroCopy.h" />
+    <ClInclude Include="src\Config\StreamTiers.h" />
     <ClInclude Include="src\Driver\NvencTap.h" />
+    <ClInclude Include="src\Driver\NvencPostPack.h" />
     <ClInclude Include="src\Driver\EyeTrackingTap.h" />
     <ClInclude Include="src\Driver\DriverLockout.h" />
     <ClInclude Include="src\Driver\DriverLog.h" />
@@ -63,6 +65,7 @@
     <ClCompile Include="src\Driver\ReconLogger.cpp" />
     <ClCompile Include="src\Driver\ZeroCopy.cpp" />
     <ClCompile Include="src\Driver\NvencTap.cpp" />
+    <ClCompile Include="src\Driver\NvencPostPack.cpp" />
     <ClCompile Include="src\Driver\EyeTrackingTap.cpp" />
     <ClCompile Include="src\Driver\DriverLockout.cpp" />
     <ClCompile Include="src\Driver\DriverLog.cpp" />

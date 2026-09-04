@@ -3,6 +3,8 @@
 #include "../Driver/DeviceProvider.h"
 #include "../Driver/DriverLog.h"
 #include <string>
+#include <vector>
+#include <tuple>
 
 // Native-identity shims for the vrlink-streamed Galaxy XR (vendor build only,
 // opt-in via galaxyXr.nativeIdentity).
@@ -18,6 +20,14 @@
 //   value differs from the target, which also terminates the event loop that
 //   our own writes would otherwise feed.
 
+// write the vrlink stream tier + headset profile keys at provider Init,
+// before vrlink reads them (see GalaxyXR.cpp)
+void GalaxyXR_EarlyApplyVrlinkSettings();
+// v3 effective stream values for the current mode (tier/custom + Advanced
+// bandwidth override); shared with the FrameProcessor's tap config
+int GalaxyXR_EffectiveTileWidth();
+int GalaxyXR_EffectiveBandwidthMbit();
+
 class GalaxyXRHmdShim : public ShimDefinition{
 public:
 	CustomHeadsetDeviceProvider* deviceProvider = nullptr;
@@ -32,9 +42,16 @@ private:
 	// write identity + icon properties; only touches values that differ
 	void ApplyIdentity();
 	bool appliedNativeResolution = false;
+	bool appliedHeadsetProfile = false;
+	int appliedProfileMaxSfw = 0;
+	bool appliedProfile10bit = false;
+	bool appliedDebugOverlay = false;
 	std::string appliedStreamQuality;
 	// custom tier values as last applied, for hot-reload change detection
 	int appliedCustomEncodeWidth = 0, appliedCustomStreamFormatWidth = 0, appliedCustomBandwidthMbit = 0;
+	int appliedBandwidthOverride = 0;
+	std::vector<std::tuple<std::string, char, double>> appliedExtraKeys;
+	int appliedMaxVqLat = 0; double appliedBackoffCoef = 0.0;
 
 	vr::PropertyContainerHandle_t container = vr::k_ulInvalidPropertyContainer;
 	bool active = false;

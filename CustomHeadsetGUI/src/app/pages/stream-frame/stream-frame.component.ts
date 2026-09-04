@@ -29,6 +29,7 @@ function defaultStreamFrame(): StreamFrameConfig {
     colorMultiplier: { r: 1, g: 1, b: 1 },
     srgbMatrix: [],
     cas: { enable: false, strength: 0.5, perEye: false, strengthLeft: 0.5, strengthRight: 0.5 },
+    postPack: { enable: false, casEnable: true, foveaStrength: 0.6, peripheryStrength: 0.3, foveaTop: true, edgeFalloff: 0.12, limitedRange: false },
     dither: false,
     stationaryDimming: { enable: false, movementThreshold: 0.4, movementTime: 15, dimSeconds: 10, brightenSeconds: 1 },
     k1: 0,
@@ -53,7 +54,30 @@ function defaultStreamFrame(): StreamFrameConfig {
     syncTimeoutMs: 10,
     directRender: true,
     zeroCopyV3: false,
-    nvencTap: false,
+    nvencTap: true,
+    nvencBandwidthOverrideMbit: 0,
+    nvencSettingsVersion: 3,
+    nvencFixLevel: true,
+    nvencBitrateMbit: 0,
+    nvencMaxQp: 0,
+    nvencAqStrength: 0,
+    nvencMaxBitrateHeadroomPct: 0,
+    nvencVbvFrames: 2,
+    nvencForceFps: 90,
+    nvencBitrateScale: true,
+    nvencVrlinkClampMbit: 350,
+    nvencPreset: 0,
+    nvencPresetMerge: true,
+    nvencVuiFullRange: -1,
+    nvencMinQp: 0,
+    nvencMinQpIntra: 0,
+    nvencForceCbr: true,
+    nvencLowDelayKfScale: 2,
+    nvencVuiMatrix: -1,
+    nvencVuiPrimaries: -1,
+    nvencVuiTransfer: -1,
+    nvencSplitMode: 1,
+    nvencVerbose: false,
     fxaa: 'off',
     hitchDiag: true,
     deferredEviction: true,
@@ -302,6 +326,26 @@ export class StreamFrameComponent {
           rawSf.streamFrameSchema = 4;
           queueMicrotask(() => this.save());
         }
+        // NVENC settings v3 (2026-09-05): one measured configuration replaces
+        // the per-experiment values. mirrors ConfigLoader's migration: the
+        // v3 encoder defaults go over any pre-v3 file, spatial AQ is forced
+        // off (it serializes NVENC submission), floors/VUI cleared, tap on.
+        if (rawSf && (rawSf.nvencSettingsVersion ?? 0) < 3) {
+          const d = defaultStreamFrame();
+          for (const k of ['nvencTap', 'nvencFixLevel', 'nvencForceCbr', 'nvencVbvFrames', 'nvencLowDelayKfScale',
+            'nvencMaxBitrateHeadroomPct', 'nvencForceFps', 'nvencBitrateScale', 'nvencPresetMerge', 'nvencSplitMode',
+            'nvencPreset', 'nvencAqStrength', 'nvencMinQp', 'nvencMinQpIntra', 'nvencMaxQp', 'nvencVuiFullRange',
+            'nvencVuiMatrix', 'nvencVuiPrimaries', 'nvencVuiTransfer', 'nvencBitrateMbit', 'nvencBandwidthOverrideMbit']) {
+            (rawSf as any)[k] = (d as any)[k];
+          }
+          rawSf.nvencSettingsVersion = 3;
+          const g = this.rootSetting.galaxyXr as any;
+          if (g) {
+            if (g.customStreamFormatWidth === undefined || g.customStreamFormatWidth > 2048 || g.customStreamFormatWidth < 512) { g.customStreamFormatWidth = 1536; }
+            g.force10bit = false; g.profileSupports10bit = false; g.vrlinkHeadsetProfile = true;
+          }
+          queueMicrotask(() => this.save());
+        }
         // kalmanAngularOutFrame is an int in the driver (0 world / 1 body /
         // 2 zero) and a string enum here; older driver builds published the
         // int, and a reset against that wrote the int back into settings.
@@ -416,13 +460,19 @@ export class StreamFrameComponent {
   get galaxyXr(): GalaxyXrConfig {
     if (this.rootSetting) {
       if (!this.rootSetting.galaxyXr) {
-        this.rootSetting.galaxyXr = { nativeIdentity: false, nativeInputProfile: false, nativeResolution: true, streamQuality: 'default', renderModelScale: 1.15 };
+        this.rootSetting.galaxyXr = { nativeIdentity: false, nativeInputProfile: false, nativeResolution: true, streamQuality: 'balanced', renderModelScale: 1.15 };
       }
       if (this.rootSetting.galaxyXr.nativeResolution === undefined) {
         this.rootSetting.galaxyXr.nativeResolution = true;
       }
       if (this.rootSetting.galaxyXr.streamQuality === undefined) {
-        this.rootSetting.galaxyXr.streamQuality = 'default';
+        this.rootSetting.galaxyXr.streamQuality = 'balanced';
+      }
+      // v3 tier names: legacy v1/v2 names map onto the closest tier
+      {
+        const q = this.rootSetting.galaxyXr.streamQuality;
+        const legacy: Record<string, string> = { stable: 'efficient', quality: 'balanced', default: 'balanced', high: 'sharp', highest: 'sharp', ultra: 'max' };
+        if (legacy[q]) { this.rootSetting.galaxyXr.streamQuality = legacy[q]; }
       }
       if (this.rootSetting.galaxyXr.renderModelScale === undefined) {
         this.rootSetting.galaxyXr.renderModelScale = 1.15;
@@ -475,11 +525,44 @@ export class StreamFrameComponent {
       if (this.rootSetting.galaxyXr.customEncodeWidth === undefined) {
         this.rootSetting.galaxyXr.customEncodeWidth = 3072;
       }
+      // streamFormatWidth now tracks customEncodeWidth (2026-08-26); the old
+      // separate field is kept in the file only so the driver can clean the
+      // legacy value out of steamvr.vrsettings
       if (this.rootSetting.galaxyXr.customStreamFormatWidth === undefined) {
-        this.rootSetting.galaxyXr.customStreamFormatWidth = 3072;
+        this.rootSetting.galaxyXr.customStreamFormatWidth = 1536; // v3: the tile, not the (inert) encode width
+      }
+      // v1 tier names migrate to the v2 tuples (driver accepts both;
+      // migrating keeps the dropdown selection visible)
+      const tierMigration: Record<string, string> = { stable: 'efficient', quality: 'balanced', high: 'sharp', highest: 'sharp', ultra: 'max' };
+      if (this.rootSetting.galaxyXr.streamQuality && tierMigration[this.rootSetting.galaxyXr.streamQuality]) {
+        this.rootSetting.galaxyXr.streamQuality = tierMigration[this.rootSetting.galaxyXr.streamQuality];
       }
       if (this.rootSetting.galaxyXr.customBandwidthMbit === undefined) {
         this.rootSetting.galaxyXr.customBandwidthMbit = 350;
+      }
+      if (this.rootSetting.galaxyXr.customStreamFormatWidthOverride === undefined) {
+        this.rootSetting.galaxyXr.customStreamFormatWidthOverride = 0;
+      }
+      if (this.rootSetting.galaxyXr.vrlinkHeadsetProfile === undefined) {
+        this.rootSetting.galaxyXr.vrlinkHeadsetProfile = true;
+      }
+      if (this.rootSetting.galaxyXr.profileMaxStreamFormatWidth === undefined) {
+        this.rootSetting.galaxyXr.profileMaxStreamFormatWidth = 3200;
+      }
+      if (this.rootSetting.galaxyXr.profileSupports10bit === undefined) {
+        this.rootSetting.galaxyXr.profileSupports10bit = false;
+      }
+      if (this.rootSetting.galaxyXr.force10bit === undefined) {
+        this.rootSetting.galaxyXr.force10bit = false;
+      }
+      if (this.rootSetting.galaxyXr.vrlinkDebugOverlay === undefined) {
+        this.rootSetting.galaxyXr.vrlinkDebugOverlay = false;
+      }
+      if (this.rootSetting.galaxyXr.vrlinkMaxVideoQueueLatencyUs === undefined) {
+        this.rootSetting.galaxyXr.vrlinkMaxVideoQueueLatencyUs = 0;
+      }
+      if (this.rootSetting.galaxyXr.vrlinkBackoffRecoveryCoefficient === undefined) {
+        this.rootSetting.galaxyXr.vrlinkBackoffRecoveryCoefficient = 0;
       }
       if (this.rootSetting.galaxyXr.simulateTouch === undefined) {
         this.rootSetting.galaxyXr.simulateTouch = false;
@@ -519,7 +602,7 @@ export class StreamFrameComponent {
 
   resetGraveyard() {
     if (!this.settings) return;
-    const archived: (keyof StreamFrameConfig)[] = ['deriveDirSource', 'deriveDirWeightPow', 'deriveDirWindowMs', 'deriveLatchAngMinSpeed', 'deriveLatchHoldMs', 'deriveLatchMinSpeed', 'deriveLatchWindowMs', 'deriveMagSource', 'derivePreFilter', 'derivePreSmoothMs', 'derivePreSmoothScope', 'deriveReleaseLatch', 'deriveSmoothAngSeparate', 'deriveSmoothAngSpeedHigh', 'deriveSmoothAngSpeedLow', 'deriveSmoothAngTauFastMs', 'deriveSmoothAngTauSlowMs', 'deriveSmoothSpeedHigh', 'deriveSmoothSpeedLow', 'deriveSmoothTauFastMs', 'deriveSmoothTauSlowMs', 'deriveSplitDirAngular', 'deriveSplitDirLinear', 'kalmanAngDirSmoothMs', 'kalmanDirSmoothMs', 'kalmanDupCoastMaxMs', 'kalmanGazeAssist', 'kalmanGazeMaxDeg', 'kalmanGazeMinSpeed', 'kalmanReleaseRewindMs', 'kalmanRewindHoldMs', 'kalmanSmoothLagMs', 'nvencTap', 'zeroCopyV3'];
+    const archived: (keyof StreamFrameConfig)[] = ['deriveDirSource', 'deriveDirWeightPow', 'deriveDirWindowMs', 'deriveLatchAngMinSpeed', 'deriveLatchHoldMs', 'deriveLatchMinSpeed', 'deriveLatchWindowMs', 'deriveMagSource', 'derivePreFilter', 'derivePreSmoothMs', 'derivePreSmoothScope', 'deriveReleaseLatch', 'deriveSmoothAngSeparate', 'deriveSmoothAngSpeedHigh', 'deriveSmoothAngSpeedLow', 'deriveSmoothAngTauFastMs', 'deriveSmoothAngTauSlowMs', 'deriveSmoothSpeedHigh', 'deriveSmoothSpeedLow', 'deriveSmoothTauFastMs', 'deriveSmoothTauSlowMs', 'deriveSplitDirAngular', 'deriveSplitDirLinear', 'kalmanAngDirSmoothMs', 'kalmanDirSmoothMs', 'kalmanDupCoastMaxMs', 'kalmanGazeAssist', 'kalmanGazeMaxDeg', 'kalmanGazeMinSpeed', 'kalmanReleaseRewindMs', 'kalmanRewindHoldMs', 'kalmanSmoothLagMs', 'zeroCopyV3'];
     for (const k of archived) { (this.settings as any)[k] = JSON.parse(JSON.stringify((this.defaults as any)[k])); }
     // FOV tangents live inside eyeGaze; reset only those subkeys so
     // gaze prediction is untouched
@@ -547,6 +630,7 @@ export class StreamFrameComponent {
     headset: true, controllers: true, ctrlFix: true, kalmanAdv: false, ctrlAdv: false, ctrlOffsets: true, tipOffset: false,
     processing: true, color: true, enhance: true, distortion: true, eyeAlign: false, share: false,
     advanced: false, debug: false, graveyard: false,
+    encoder: true, encoderAdv: false, encoderDbg: false,
   };
   // any calibration overlay/mode that would be visible or disruptive in a
   // normal play session — drives the warning banner at the top of the page

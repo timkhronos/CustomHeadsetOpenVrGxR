@@ -3,6 +3,9 @@
 #include "ReconLogger.h"
 #include "ZeroCopy.h"
 #include "NvencTap.h"
+#include "NvencPostPack.h"
+#include "../Config/StreamTiers.h"
+#include "../Headsets/GalaxyXR.h"
 
 // shared head-direction -> per-eye viewport uv mapping. this is the exact
 // math the gaze debug ring uses (verified against the runtime's foveation
@@ -1685,8 +1688,52 @@ bool FrameProcessor::ProcessSceneLayer(vr::SharedTextureHandle_t leftEye, vr::Sh
 	}
 	ZeroCopyV3::Get().SetArmed(settings.config.zeroCopyV3);
 	ZeroCopyV3::Get().MaybeHeartbeat();
-	if(settings.config.nvencTap){
-		NvencTap::Get().TryInstall();
+	{
+		// v3: the encoder settings are global; the tier (or custom mode)
+		// only supplies tile width + bandwidth. nvencTap is the master
+		// switch: off = stock streamer.
+		NvencTapConfig tc;
+		tc.enabled = settings.config.nvencTap;
+		tc.fixLevel = settings.config.nvencFixLevel;
+		// encoder bitrate: the debug "separate" value if set, else the
+		// effective pacer bandwidth (tier/custom/Advanced override)
+		tc.bitrateMbit = settings.config.nvencBitrateMbit > 0 ? settings.config.nvencBitrateMbit : GalaxyXR_EffectiveBandwidthMbit();
+		tc.maxQp = settings.config.nvencMaxQp;
+		tc.aqStrength = settings.config.nvencAqStrength;
+		tc.maxBitrateHeadroomPct = settings.config.nvencMaxBitrateHeadroomPct;
+		tc.vbvFrames = settings.config.nvencVbvFrames;
+		tc.forceFps = settings.config.nvencForceFps;
+		tc.bitrateScale = settings.config.nvencBitrateScale;
+		tc.vrlinkClampMbit = settings.config.nvencVrlinkClampMbit;
+		tc.preset = settings.config.nvencPreset;
+		tc.presetMerge = settings.config.nvencPresetMerge;
+		// the post-pack limited-range remap needs the VUI full-range flag
+		// cleared so the decoder expands 16..235 back; it overrides the
+		// (graveyard) manual VUI value
+		tc.vuiFullRange = settings.config.postPack.enable && settings.config.postPack.limitedRange ? 0 : settings.config.nvencVuiFullRange;
+		tc.vuiMatrix = settings.config.nvencVuiMatrix;
+		tc.vuiPrimaries = settings.config.nvencVuiPrimaries;
+		tc.vuiTransfer = settings.config.nvencVuiTransfer;
+		tc.minQp = settings.config.nvencMinQp;
+		tc.minQpIntra = settings.config.nvencMinQpIntra;
+		tc.forceCbr = settings.config.nvencForceCbr;
+		tc.lowDelayKfScale = settings.config.nvencLowDelayKfScale;
+		tc.presetAuto = settings.config.nvencPreset == 0; // 0 = by engine count (NvencTap)
+		{
+			const auto &pp = settings.config.postPack;
+			NvencPostPackConfig pc;
+			pc.enable = tc.enabled && pp.enable; pc.casEnable = pp.casEnable;
+			pc.foveaStrength = (float)pp.foveaStrength; pc.peripheryStrength = (float)pp.peripheryStrength;
+			pc.foveaTop = pp.foveaTop; pc.limitedRange = pp.limitedRange; pc.edgeFalloff = (float)pp.edgeFalloff;
+			NvencPostPack::SetConfig(pc);
+		}
+		tc.splitMode = settings.config.nvencSplitMode;
+		tc.verbose = settings.config.nvencVerbose;
+		NvencTap::Get().SetConfig(tc);
+		if(tc.enabled){
+			NvencTap::Get().TryInstall();
+			NvencTap::Get().MaybeHeartbeat();
+		}
 	}
 	frameCounter++;
 

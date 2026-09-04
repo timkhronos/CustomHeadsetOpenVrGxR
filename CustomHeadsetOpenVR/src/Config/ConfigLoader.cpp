@@ -6,6 +6,7 @@
 #include <chrono>
 #include "nlohmann/json.hpp"
 #include "../Driver/DriverLog.h"
+#include "StreamTiers.h"
 #include "../Distortion/DistortionProfileConstructor.h"
 #ifdef _WIN32
 #include "Windows.h"
@@ -401,6 +402,43 @@ void ConfigLoader::ParseConfig(){
 			if(galaxyXrData["customBandwidthMbit"].is_number()){
 				newConfig.galaxyXr.customBandwidthMbit = galaxyXrData["customBandwidthMbit"].get<int>();
 			}
+			if(galaxyXrData["customStreamFormatWidthOverride"].is_number()){
+				newConfig.galaxyXr.customStreamFormatWidthOverride = galaxyXrData["customStreamFormatWidthOverride"].get<int>();
+			}
+			if(galaxyXrData["vrlinkHeadsetProfile"].is_boolean()){
+				newConfig.galaxyXr.vrlinkHeadsetProfile = galaxyXrData["vrlinkHeadsetProfile"].get<bool>();
+			}
+			if(galaxyXrData["profileMaxStreamFormatWidth"].is_number()){
+				newConfig.galaxyXr.profileMaxStreamFormatWidth = galaxyXrData["profileMaxStreamFormatWidth"].get<int>();
+			}
+			if(galaxyXrData["profileSupports10bit"].is_boolean()){
+				newConfig.galaxyXr.profileSupports10bit = galaxyXrData["profileSupports10bit"].get<bool>();
+			}
+			if(galaxyXrData["force10bit"].is_boolean()){
+				newConfig.galaxyXr.force10bit = galaxyXrData["force10bit"].get<bool>();
+			}
+			if(galaxyXrData["vrlinkDebugOverlay"].is_boolean()){
+				newConfig.galaxyXr.vrlinkDebugOverlay = galaxyXrData["vrlinkDebugOverlay"].get<bool>();
+			}
+			if(galaxyXrData["vrlinkMaxVideoQueueLatencyUs"].is_number()){
+				newConfig.galaxyXr.vrlinkMaxVideoQueueLatencyUs = galaxyXrData["vrlinkMaxVideoQueueLatencyUs"].get<int>();
+			}
+			if(galaxyXrData["vrlinkBackoffRecoveryCoefficient"].is_number()){
+				newConfig.galaxyXr.vrlinkBackoffRecoveryCoefficient = galaxyXrData["vrlinkBackoffRecoveryCoefficient"].get<double>();
+			}
+			if(galaxyXrData["vrlinkExtraKeys"].is_object()){
+				for(auto it = galaxyXrData["vrlinkExtraKeys"].begin(); it != galaxyXrData["vrlinkExtraKeys"].end(); ++it){
+					const auto &v = it.value();
+					if(v.is_null()){ newConfig.galaxyXr.vrlinkExtraKeys.emplace_back(it.key(), 'x', 0.0); }
+					else if(v.is_object() && v.contains("i") && v["i"].is_number()){ newConfig.galaxyXr.vrlinkExtraKeys.emplace_back(it.key(), 'i', v["i"].get<double>()); }
+					else if(v.is_object() && v.contains("f") && v["f"].is_number()){ newConfig.galaxyXr.vrlinkExtraKeys.emplace_back(it.key(), 'f', v["f"].get<double>()); }
+					else if(v.is_object() && v.contains("b") && v["b"].is_boolean()){ newConfig.galaxyXr.vrlinkExtraKeys.emplace_back(it.key(), 'b', v["b"].get<bool>() ? 1.0 : 0.0); }
+					// bare numbers/bools are accepted too: integer -> int, fractional -> float
+					else if(v.is_boolean()){ newConfig.galaxyXr.vrlinkExtraKeys.emplace_back(it.key(), 'b', v.get<bool>() ? 1.0 : 0.0); }
+					else if(v.is_number_integer()){ newConfig.galaxyXr.vrlinkExtraKeys.emplace_back(it.key(), 'i', v.get<double>()); }
+					else if(v.is_number()){ newConfig.galaxyXr.vrlinkExtraKeys.emplace_back(it.key(), 'f', v.get<double>()); }
+				}
+			}
 			if(galaxyXrData["renderModelScale"].is_number()){
 				newConfig.galaxyXr.renderModelScale = galaxyXrData["renderModelScale"].get<double>();
 			}
@@ -524,6 +562,19 @@ void ConfigLoader::ParseConfig(){
 				if(casData["enable"].is_boolean()){
 					newConfig.streamFrame.cas.enable = casData["enable"].get<bool>();
 				}
+			}
+			if(streamFrameData["postPack"].is_object()){
+				auto &pp = streamFrameData["postPack"]; auto &c = newConfig.streamFrame.postPack;
+				if(pp["enable"].is_boolean()){ c.enable = pp["enable"].get<bool>(); }
+				if(pp["casEnable"].is_boolean()){ c.casEnable = pp["casEnable"].get<bool>(); }
+				if(pp["foveaStrength"].is_number()){ c.foveaStrength = pp["foveaStrength"].get<double>(); }
+				if(pp["peripheryStrength"].is_number()){ c.peripheryStrength = pp["peripheryStrength"].get<double>(); }
+				if(pp["foveaTop"].is_boolean()){ c.foveaTop = pp["foveaTop"].get<bool>(); }
+				if(pp["edgeFalloff"].is_number()){ c.edgeFalloff = pp["edgeFalloff"].get<double>(); }
+				if(pp["limitedRange"].is_boolean()){ c.limitedRange = pp["limitedRange"].get<bool>(); }
+			}
+			if(streamFrameData["cas"].is_object()){
+				auto &casData = streamFrameData["cas"];
 				if(casData["strength"].is_number()){
 					newConfig.streamFrame.cas.strength = casData["strength"].get<double>();
 				}
@@ -828,6 +879,75 @@ void ConfigLoader::ParseConfig(){
 			}
 			if(streamFrameData["nvencTap"].is_boolean()){
 				newConfig.streamFrame.nvencTap = streamFrameData["nvencTap"].get<bool>();
+			}
+			if(streamFrameData["nvencBandwidthOverrideMbit"].is_number()){
+				newConfig.streamFrame.nvencBandwidthOverrideMbit = streamFrameData["nvencBandwidthOverrideMbit"].get<int>();
+			}
+			if(streamFrameData["nvencSettingsVersion"].is_number()){
+				newConfig.streamFrame.nvencSettingsVersion = streamFrameData["nvencSettingsVersion"].get<int>();
+			}
+			if(streamFrameData["nvencFixLevel"].is_boolean()){
+				newConfig.streamFrame.nvencFixLevel = streamFrameData["nvencFixLevel"].get<bool>();
+			}
+			if(streamFrameData["nvencBitrateMbit"].is_number()){
+				newConfig.streamFrame.nvencBitrateMbit = streamFrameData["nvencBitrateMbit"].get<int>();
+			}
+			if(streamFrameData["nvencMaxQp"].is_number()){
+				newConfig.streamFrame.nvencMaxQp = streamFrameData["nvencMaxQp"].get<int>();
+			}
+			if(streamFrameData["nvencAqStrength"].is_number()){
+				newConfig.streamFrame.nvencAqStrength = streamFrameData["nvencAqStrength"].get<int>();
+			}
+			if(streamFrameData["nvencMaxBitrateHeadroomPct"].is_number()){
+				newConfig.streamFrame.nvencMaxBitrateHeadroomPct = streamFrameData["nvencMaxBitrateHeadroomPct"].get<int>();
+			}
+			if(streamFrameData["nvencVbvFrames"].is_number()){
+				newConfig.streamFrame.nvencVbvFrames = streamFrameData["nvencVbvFrames"].get<int>();
+			}
+			if(streamFrameData["nvencForceFps"].is_number()){
+				newConfig.streamFrame.nvencForceFps = streamFrameData["nvencForceFps"].get<int>();
+			}
+			if(streamFrameData["nvencBitrateScale"].is_boolean()){
+				newConfig.streamFrame.nvencBitrateScale = streamFrameData["nvencBitrateScale"].get<bool>();
+			}
+			if(streamFrameData["nvencVrlinkClampMbit"].is_number()){
+				newConfig.streamFrame.nvencVrlinkClampMbit = streamFrameData["nvencVrlinkClampMbit"].get<int>();
+			}
+			if(streamFrameData["nvencPreset"].is_number()){
+				newConfig.streamFrame.nvencPreset = streamFrameData["nvencPreset"].get<int>();
+			}
+			if(streamFrameData["nvencPresetMerge"].is_boolean()){
+				newConfig.streamFrame.nvencPresetMerge = streamFrameData["nvencPresetMerge"].get<bool>();
+			}
+			if(streamFrameData["nvencVuiFullRange"].is_number()){
+				newConfig.streamFrame.nvencVuiFullRange = streamFrameData["nvencVuiFullRange"].get<int>();
+			}
+			if(streamFrameData["nvencMinQp"].is_number()){
+				newConfig.streamFrame.nvencMinQp = streamFrameData["nvencMinQp"].get<int>();
+			}
+			if(streamFrameData["nvencMinQpIntra"].is_number()){
+				newConfig.streamFrame.nvencMinQpIntra = streamFrameData["nvencMinQpIntra"].get<int>();
+			}
+			if(streamFrameData["nvencForceCbr"].is_boolean()){
+				newConfig.streamFrame.nvencForceCbr = streamFrameData["nvencForceCbr"].get<bool>();
+			}
+			if(streamFrameData["nvencLowDelayKfScale"].is_number()){
+				newConfig.streamFrame.nvencLowDelayKfScale = streamFrameData["nvencLowDelayKfScale"].get<int>();
+			}
+			if(streamFrameData["nvencVuiMatrix"].is_number()){
+				newConfig.streamFrame.nvencVuiMatrix = streamFrameData["nvencVuiMatrix"].get<int>();
+			}
+			if(streamFrameData["nvencVuiPrimaries"].is_number()){
+				newConfig.streamFrame.nvencVuiPrimaries = streamFrameData["nvencVuiPrimaries"].get<int>();
+			}
+			if(streamFrameData["nvencVuiTransfer"].is_number()){
+				newConfig.streamFrame.nvencVuiTransfer = streamFrameData["nvencVuiTransfer"].get<int>();
+			}
+			if(streamFrameData["nvencSplitMode"].is_number()){
+				newConfig.streamFrame.nvencSplitMode = streamFrameData["nvencSplitMode"].get<int>();
+			}
+			if(streamFrameData["nvencVerbose"].is_boolean()){
+				newConfig.streamFrame.nvencVerbose = streamFrameData["nvencVerbose"].get<bool>();
 			}
 			if(streamFrameData["velocityFixMode"].is_string()){
 				std::string mode = streamFrameData["velocityFixMode"].get<std::string>();
@@ -1306,6 +1426,39 @@ void ConfigLoader::ParseConfig(){
 			}
 			sf.streamFrameSchema = 4;
 		}
+		// v3 encoder-settings migration (2026-09-05). files written before the
+		// NVENC rewrite carry per-experiment values (AQ, floors, VBR, no fps
+		// pin, tap off, legacy tier names). the measured outcome of the
+		// project is one configuration, so a pre-v3 file gets the v3 encoder
+		// defaults over it; only bandwidth/tier/custom widths survive. AQ is
+		// forced off unconditionally: any spatial AQ serializes NVENC
+		// submission (run X3). the GUI writes nvencSettingsVersion 3 on save.
+		{
+			auto &sf = newConfig.streamFrame;
+			auto &g = newConfig.galaxyXr;
+			std::string canon = CanonicalGxrStreamTierName(g.streamQuality);
+			if(canon != g.streamQuality){
+				DriverLog("Config: stream quality '%s' -> '%s' (legacy tier name)", g.streamQuality.c_str(), canon.c_str());
+				g.streamQuality = canon;
+			}
+			if(sf.nvencSettingsVersion < 3){
+				const StreamFrameConfig d = {};
+				bool hadAq = sf.nvencAqStrength > 0;
+				sf.nvencTap = d.nvencTap; sf.nvencFixLevel = d.nvencFixLevel; sf.nvencForceCbr = d.nvencForceCbr;
+				sf.nvencVbvFrames = d.nvencVbvFrames; sf.nvencLowDelayKfScale = d.nvencLowDelayKfScale;
+				sf.nvencMaxBitrateHeadroomPct = d.nvencMaxBitrateHeadroomPct; sf.nvencForceFps = d.nvencForceFps;
+				sf.nvencBitrateScale = d.nvencBitrateScale; sf.nvencPresetMerge = d.nvencPresetMerge;
+				sf.nvencSplitMode = d.nvencSplitMode; sf.nvencPreset = d.nvencPreset;
+				sf.nvencAqStrength = 0; sf.nvencMinQp = 0; sf.nvencMinQpIntra = 0; sf.nvencMaxQp = 0;
+				sf.nvencVuiFullRange = -1; sf.nvencVuiMatrix = -1; sf.nvencVuiPrimaries = -1; sf.nvencVuiTransfer = -1;
+				sf.nvencBitrateMbit = 0; sf.nvencBandwidthOverrideMbit = 0;
+				if(g.customStreamFormatWidth > 2048 || g.customStreamFormatWidth < 512){ g.customStreamFormatWidth = 1536; }
+				g.force10bit = false; g.profileSupports10bit = false; g.vrlinkHeadsetProfile = true;
+				sf.nvencSettingsVersion = 3;
+				DriverLog("Config: NVENC settings migrated to v3 defaults (tap on, P auto, CBR, VBV 2, KF 2, headroom 0, fps 90, split auto, AQ/floors/VUI cleared%s); tier '%s'",
+					hadAq ? " - spatial AQ was set and is now OFF: it serialized the encoder" : "", g.streamQuality.c_str());
+			}
+		}
 		// write to global config
 		{
 			std::lock_guard<std::mutex> lock(driverConfigLock);
@@ -1542,6 +1695,15 @@ void ConfigLoader::WriteInfo(){
 					{"strengthLeft", defaultSettings.streamFrame.cas.strengthLeft},
 					{"strengthRight", defaultSettings.streamFrame.cas.strengthRight},
 				}},
+				{"postPack", {
+					{"enable", defaultSettings.streamFrame.postPack.enable},
+					{"casEnable", defaultSettings.streamFrame.postPack.casEnable},
+					{"foveaStrength", defaultSettings.streamFrame.postPack.foveaStrength},
+					{"peripheryStrength", defaultSettings.streamFrame.postPack.peripheryStrength},
+					{"foveaTop", defaultSettings.streamFrame.postPack.foveaTop},
+					{"edgeFalloff", defaultSettings.streamFrame.postPack.edgeFalloff},
+					{"limitedRange", defaultSettings.streamFrame.postPack.limitedRange},
+				}},
 				{"dither", defaultSettings.streamFrame.dither},
 				{"blackFloor", {
 					{"rampBar", defaultSettings.streamFrame.blackFloor.rampBar},
@@ -1629,6 +1791,29 @@ void ConfigLoader::WriteInfo(){
 				}},
 				{"zeroCopyV3", defaultSettings.streamFrame.zeroCopyV3},
 				{"nvencTap", defaultSettings.streamFrame.nvencTap},
+				{"nvencBandwidthOverrideMbit", defaultSettings.streamFrame.nvencBandwidthOverrideMbit},
+				{"nvencSettingsVersion", 3},
+				{"nvencFixLevel", defaultSettings.streamFrame.nvencFixLevel},
+				{"nvencBitrateMbit", defaultSettings.streamFrame.nvencBitrateMbit},
+				{"nvencMaxQp", defaultSettings.streamFrame.nvencMaxQp},
+				{"nvencAqStrength", defaultSettings.streamFrame.nvencAqStrength},
+				{"nvencMaxBitrateHeadroomPct", defaultSettings.streamFrame.nvencMaxBitrateHeadroomPct},
+				{"nvencVbvFrames", defaultSettings.streamFrame.nvencVbvFrames},
+				{"nvencForceFps", defaultSettings.streamFrame.nvencForceFps},
+				{"nvencBitrateScale", defaultSettings.streamFrame.nvencBitrateScale},
+				{"nvencVrlinkClampMbit", defaultSettings.streamFrame.nvencVrlinkClampMbit},
+				{"nvencPreset", defaultSettings.streamFrame.nvencPreset},
+				{"nvencPresetMerge", defaultSettings.streamFrame.nvencPresetMerge},
+				{"nvencVuiFullRange", defaultSettings.streamFrame.nvencVuiFullRange},
+				{"nvencMinQp", defaultSettings.streamFrame.nvencMinQp},
+				{"nvencMinQpIntra", defaultSettings.streamFrame.nvencMinQpIntra},
+				{"nvencForceCbr", defaultSettings.streamFrame.nvencForceCbr},
+				{"nvencLowDelayKfScale", defaultSettings.streamFrame.nvencLowDelayKfScale},
+				{"nvencVuiMatrix", defaultSettings.streamFrame.nvencVuiMatrix},
+				{"nvencVuiPrimaries", defaultSettings.streamFrame.nvencVuiPrimaries},
+				{"nvencVuiTransfer", defaultSettings.streamFrame.nvencVuiTransfer},
+				{"nvencSplitMode", defaultSettings.streamFrame.nvencSplitMode},
+				{"nvencVerbose", defaultSettings.streamFrame.nvencVerbose},
 				{"velocityFixMode", defaultSettings.streamFrame.velocityFixMode == 6 ? "kalmanCA" : (defaultSettings.streamFrame.velocityFixMode == 5 ? "kalmanCAM" : (defaultSettings.streamFrame.velocityFixMode == 4 ? "kalman" : (defaultSettings.streamFrame.velocityFixMode == 3 ? "derive" : (defaultSettings.streamFrame.velocityFixMode == 2 ? "full" : (defaultSettings.streamFrame.velocityFixMode == 1 ? "classic" : "off")))))},
 				{"deriveSmoothTauSlowMs", defaultSettings.streamFrame.deriveSmoothTauSlowMs},
 				{"deriveSmoothTauFastMs", defaultSettings.streamFrame.deriveSmoothTauFastMs},

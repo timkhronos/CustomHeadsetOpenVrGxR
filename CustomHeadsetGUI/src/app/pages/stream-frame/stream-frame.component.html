@@ -33,52 +33,204 @@
 </div>
 <div class="field">
     <div class="title">
-        <span i18n>Stream Quality Preset</span>
-        <app-field-tip info="Encode width, transport width and bandwidth presets validated by the community settings tool. Default uses vrlink's built-in automatic settings. Ultra uses an above-transport source width: requires Wi-Fi 7 6 GHz, and if driver_vrlink.txt shows NVENC Invalid Level or buffer starvation, fall back to High. Takes effect at the next SteamVR start or headset connect." />
+        <span>Stream Quality Preset</span>
+        <app-field-tip info="Tile width and bandwidth. The stream is four stacked square tiles of this width per frame (per eye: the whole view downscaled, plus a 1:1 gaze-tracked cut-out of the render target). 1536 keeps the encoder ahead of the streamer on a 3-engine GPU and gets the full bitrate; 2048 is the hard ceiling (4 x 2048 = the codec's 8192-row limit) and is encode-limited today. Bandwidth drives the network pacer and the encoder together; 350 is the streamer's own ceiling, 450 the headset's. Everything else about the encoder is in the Encoder group below and is the same for every tier. Box size and sharpness inside the fovea come from SteamVR supersampling (~200% recommended). Takes effect at the next SteamVR start or headset connect." />
     </div>
     <div class="control">
-        <mat-select [(ngModel)]="galaxyXr.streamQuality" (ngModelChange)="save()" style="width: 220px;">
-            <mat-option value="default" i18n>Default (vrlink automatic)</mat-option>
-            <mat-option value="stable">Stable &mdash; 2048 / 250 Mbit/s</mat-option>
-            <mat-option value="quality">Quality &mdash; 2560 / 300 Mbit/s</mat-option>
-            <mat-option value="high">High &mdash; 3072 / 300 Mbit/s</mat-option>
-            <mat-option value="highest">Highest &mdash; 3072 / 350 Mbit/s</mat-option>
-            <mat-option value="ultra">Ultra &mdash; 4032 / 350 Mbit/s (Wi-Fi 7)</mat-option>
-            <mat-option value="custom">Custom &mdash; set the vrlink values yourself</mat-option>
+        <mat-select [(ngModel)]="galaxyXr.streamQuality" (ngModelChange)="save()" style="width: 300px;">
+            <mat-option value="efficient">Efficient &mdash; 1536 tile, 300 Mbit/s (any link)</mat-option>
+            <mat-option value="balanced">Balanced &mdash; 1536 tile, 350 Mbit/s (recommended)</mat-option>
+            <mat-option value="sharp">Sharp &mdash; 1536 tile, 450 Mbit/s (good 6 GHz link)</mat-option>
+            <mat-option value="max">Max &mdash; 2048 tile, 450 Mbit/s (encode-limited on current GPUs)</mat-option>
+            <mat-option value="custom">Custom &mdash; set tile and bandwidth yourself</mat-option>
         </mat-select>
     </div>
 </div>
 @if(galaxyXr.streamQuality === 'custom'){
 <div class="field">
     <div class="title">
-        <span>Custom: Encode Width</span>
-        <app-field-tip info="vrlink encodeWidth. In testing this had no visible effect on its own; Stream Format Width is what vrlink actually encodes at. Kept for completeness. Takes effect at the next SteamVR start / headset connect." />
-        <app-reset-button [canReset]="galaxyXr.customEncodeWidth !== 3072" (resetClick)="galaxyXr.customEncodeWidth = 3072; save()"></app-reset-button>
+        <span>Custom: Tile Width (streamFormatWidth)</span>
+        <app-field-tip info="The transport tile in pixels: 1536 or 2048. Anything above 2048 is silently clamped by the streamer (four stacked tiles must fit the codec's 8192-row limit). Also sets the profile's maxStreamFormatWidth." />
+        <app-reset-button [canReset]="galaxyXr.customStreamFormatWidth != 1536" (resetClick)="galaxyXr.customStreamFormatWidth = 1536; save()"></app-reset-button>
     </div>
     <div class="control">
-        <input matInput [(ngModel)]="galaxyXr.customEncodeWidth" step="256" min="512" max="8192" (ngModelChange)="save()" type="number">
-    </div>
-</div>
-<div class="field">
-    <div class="title">
-        <span>Custom: Stream Format Width</span>
-        <app-field-tip info="vrlink streamFormatWidth: the per-eye width the video is actually encoded and decoded at (vrlink's m_nTargetEncodeWidth follows this). The panel is 3552 wide; wider is wasted. The old presets pinned this at 1536. Takes effect at the next SteamVR start / headset connect." />
-        <app-reset-button [canReset]="galaxyXr.customStreamFormatWidth !== 3072" (resetClick)="galaxyXr.customStreamFormatWidth = 3072; save()"></app-reset-button>
-    </div>
-    <div class="control">
-        <input matInput [(ngModel)]="galaxyXr.customStreamFormatWidth" step="256" min="512" max="8192" (ngModelChange)="save()" type="number">
+        <input matInput [(ngModel)]="galaxyXr.customStreamFormatWidth" step="512" min="512" max="2048" (ngModelChange)="save()" type="number">
     </div>
 </div>
 <div class="field">
     <div class="title">
         <span>Custom: Bandwidth (Mbit/s)</span>
-        <app-field-tip info="vrlink targetBandwidth and recommendedBandwidthMbit, with automatic bandwidth off. This is the encoder's ceiling, not its average; check the actual rate with the Steam Link stats overlay on motion. Some reports say vrlink clamps at 350, others run 600; unverified. Takes effect at the next headset connect." />
-        <app-reset-button [canReset]="galaxyXr.customBandwidthMbit !== 350" (resetClick)="galaxyXr.customBandwidthMbit = 350; save()"></app-reset-button>
+        <app-field-tip info="Written to targetBandwidth and recommendedBandwidthMbit (the pacer) and used as the encoder bitrate. The streamer's own request never exceeds 350; above that the encoder is scaled up proportionally. 450 is the headset's practical limit." />
+        <app-reset-button [canReset]="galaxyXr.customBandwidthMbit != 350" (resetClick)="galaxyXr.customBandwidthMbit = 350; save()"></app-reset-button>
     </div>
     <div class="control">
-        <input matInput [(ngModel)]="galaxyXr.customBandwidthMbit" step="25" min="10" max="2000" (ngModelChange)="save()" type="number">
+        <input matInput [(ngModel)]="galaxyXr.customBandwidthMbit" step="25" min="100" max="600" (ngModelChange)="save()" type="number">
     </div>
 </div>
+}
+<div class="field">
+    <div class="section-title collapsible level-1" (click)="sections.encoder = !sections.encoder"><span>Encoder</span><span class="chevron" [class.closed]="!sections.encoder">▾</span></div>
+</div>
+@if(sections.encoder){
+<div class="field">
+    <div class="title">
+        <span>vrlink Headset Profile</span>
+        <app-field-tip info="Writes a vrlink_&lt;model&gt; settings section (vrlink_xrvst2ue) telling Steam Link what the Galaxy XR can do: native render size, 10-bit support and the stream-format width range (max tracks the tile width above). Written at driver start so the first connect already sees it." />
+    </div>
+    <div class="control">
+        <mat-slide-toggle [(ngModel)]="galaxyXr.vrlinkHeadsetProfile" (ngModelChange)="save()"></mat-slide-toggle>
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Profile: Supports 10-bit</span>
+        <app-field-tip info="Writes supports10bit in the profile. The APK can't currently decode 10-bit HEVC (measured: ~15 fps and continuous stream resets), so enabling it would be a waste. Kept in place for a future client." />
+    </div>
+    <div class="control">
+        <mat-slide-toggle [(ngModel)]="galaxyXr.profileSupports10bit" (ngModelChange)="save()" [disabled]="true"></mat-slide-toggle>
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>NVENC Tap</span>
+        <app-field-tip info="Hooks the streamer's video encoder setup and applies the settings below on every encoder init and reconfigure. Every change is tried once and, if the encoder rejects it, retried with the streamer's own values, so the worst case is stock behaviour plus a log line. Off = stock streamer (the tier then only sets tile width and bandwidth). Requires an NVIDIA GPU; turn on BEFORE launching SteamVR." />
+        <app-reset-button [canReset]="settings.nvencTap != defaults.nvencTap" (resetClick)="reset('nvencTap')"></app-reset-button>
+    </div>
+    <div class="control">
+        <mat-slide-toggle [(ngModel)]="settings.nvencTap" (ngModelChange)="save()"></mat-slide-toggle>
+    </div>
+</div>
+@if(settings.nvencTap){
+<div class="field">
+    <div class="section-title collapsible level-2" (click)="sections.encoderAdv = !sections.encoderAdv"><span>Advanced</span><span class="chevron" [class.closed]="!sections.encoderAdv">▾</span></div>
+</div>
+@if(sections.encoderAdv){
+<div class="field">
+    <div class="title">
+        <span>Bandwidth Override (Mbit/s)</span>
+        <app-field-tip info="0 follows the tier (or custom) bandwidth. Nonzero writes both the network pacer and the encoder bitrate at once, replacing the tier value." />
+        <app-reset-button [canReset]="settings.nvencBandwidthOverrideMbit != defaults.nvencBandwidthOverrideMbit" (resetClick)="reset('nvencBandwidthOverrideMbit')"></app-reset-button>
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="settings.nvencBandwidthOverrideMbit" step="25" min="0" max="600" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>VBV Frames</span>
+        <app-field-tip info="VBV = average bitrate per frame times this, which bounds how large any single frame can be. 2 caps vegetation peaks and reset key frames at about two frame budgets, far below the streamer's 2 MB send limit. 0 leaves the streamer's value." />
+        <app-reset-button [canReset]="settings.nvencVbvFrames != defaults.nvencVbvFrames" (resetClick)="reset('nvencVbvFrames')"></app-reset-button>
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="settings.nvencVbvFrames" step="1" min="0" max="30" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Preset Override (P1-P7)</span>
+        <app-field-tip info="0 = automatic by NVENC engine count (3 engines: P7, 2: P5, 1: P4; logged as 'preset AUTO'). Higher presets spend more encoder time for better quality at the same bitrate; P7 needs the split across three engines to hold 90 fps." />
+        <app-reset-button [canReset]="settings.nvencPreset != defaults.nvencPreset" (resetClick)="reset('nvencPreset')"></app-reset-button>
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="settings.nvencPreset" step="1" min="0" max="7" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Force CBR</span>
+        <app-field-tip info="Switches rate control to constant bitrate with low-delay key-frame scaling. Every frame gets the same budget, so complex scenes get slightly coarser instead of larger and later. Recommended on." />
+        <app-reset-button [canReset]="settings.nvencForceCbr != defaults.nvencForceCbr" (resetClick)="reset('nvencForceCbr')"></app-reset-button>
+    </div>
+    <div class="control">
+        <mat-slide-toggle [(ngModel)]="settings.nvencForceCbr" (ngModelChange)="save()"></mat-slide-toggle>
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>CBR Key Frame Budget (x frames)</span>
+        <app-field-tip info="With Force CBR: how many P-frame budgets the key frame after an encoder reset may spend (1-4). 2 fits inside VBV Frames 2 and gives a sharper key frame than 1." />
+        <app-reset-button [canReset]="settings.nvencLowDelayKfScale != defaults.nvencLowDelayKfScale" (resetClick)="reset('nvencLowDelayKfScale')"></app-reset-button>
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="settings.nvencLowDelayKfScale" step="1" min="1" max="4" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Split-Frame Encoding</span>
+        <app-field-tip info="Spreads each frame across the GPU's NVENC engines. The driver only does this by itself for presets P1-P4; higher presets need it forced or they drop to ~50 fps. 1 = forced, driver picks the strip count (measured best); 2-4 force that many strips; 15 disables; 0 leaves the driver's choice. Nonzero opens the encoder session as API 12.1 (look for 'SESSION UPGRADE' in the log)." />
+        <app-reset-button [canReset]="settings.nvencSplitMode != defaults.nvencSplitMode" (resetClick)="reset('nvencSplitMode')"></app-reset-button>
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="settings.nvencSplitMode" step="1" min="0" max="15" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+<div class="field">
+    <div class="section-title collapsible level-3" (click)="sections.encoderDbg = !sections.encoderDbg"><span>Debug</span><span class="chevron" [class.closed]="!sections.encoderDbg">▾</span></div>
+</div>
+@if(sections.encoderDbg){
+<div class="field">
+    <div class="title">
+        <span>vrlink Debug Overlay</span>
+        <app-field-tip info="Displays a coloured overlay on the foveated area and the streamer's advanced graphs (encode time, RFOV %). Diagnostic only; takes effect at the next connect." />
+    </div>
+    <div class="control">
+        <mat-slide-toggle [(ngModel)]="galaxyXr.vrlinkDebugOverlay" (ngModelChange)="save()"></mat-slide-toggle>
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>NVENC: Fix Level</span>
+        <app-field-tip info="Sets HEVC level to auto-select and tier to High on every encoder init and reconfigure. The streamer hardcodes level 6.1, which the 8192-row canvas exceeds at 90 Hz, so its reconfigures were being rejected. Keep on." />
+        <app-reset-button [canReset]="settings.nvencFixLevel != defaults.nvencFixLevel" (resetClick)="reset('nvencFixLevel')"></app-reset-button>
+    </div>
+    <div class="control">
+        <mat-slide-toggle [(ngModel)]="settings.nvencFixLevel" (ngModelChange)="save()"></mat-slide-toggle>
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Peak Headroom (%)</span>
+        <app-field-tip info="Peak bitrate over the average, in percent. Only meaningful without Force CBR (under CBR peak = average). 0 measured safe." />
+        <app-reset-button [canReset]="settings.nvencMaxBitrateHeadroomPct != defaults.nvencMaxBitrateHeadroomPct" (resetClick)="reset('nvencMaxBitrateHeadroomPct')"></app-reset-button>
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="settings.nvencMaxBitrateHeadroomPct" step="5" min="0" max="100" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Force Frame Rate</span>
+        <app-field-tip info="Pins the encoder's frame rate so the per-frame budget is constant. Without it the streamer passes its momentary estimate (down to 12 fps while hitching) and under CBR the next key frame balloons. Recommended 90. 0 leaves the streamer's value." />
+        <app-reset-button [canReset]="settings.nvencForceFps != defaults.nvencForceFps" (resetClick)="reset('nvencForceFps')"></app-reset-button>
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="settings.nvencForceFps" step="1" min="0" max="120" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Encoder Bitrate (separate, Mbit/s)</span>
+        <app-field-tip info="0 = the encoder bitrate equals the pacer bandwidth (normal). Nonzero sets only the encoder, for experiments where the pacer and the encoder should differ." />
+        <app-reset-button [canReset]="settings.nvencBitrateMbit != defaults.nvencBitrateMbit" (resetClick)="reset('nvencBitrateMbit')"></app-reset-button>
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="settings.nvencBitrateMbit" step="25" min="0" max="600" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>NVENC: Verbose Log</span>
+        <app-field-tip info="Logs every reconfigure and hex-dumps the encoder structs. For offline decoding of driver_vrlink's encoder setup; leave off." />
+        <app-reset-button [canReset]="settings.nvencVerbose != defaults.nvencVerbose" (resetClick)="reset('nvencVerbose')"></app-reset-button>
+    </div>
+    <div class="control">
+        <mat-slide-toggle [(ngModel)]="settings.nvencVerbose" (ngModelChange)="save()"></mat-slide-toggle>
+    </div>
+</div>
+}
+}
+}
 }
 <div class="field">
     <div class="note" i18n>Native identity changes take effect after restarting SteamVR.</div>
@@ -700,6 +852,85 @@
     </div>
 </div>
 }
+}
+<div class="field">
+    <div class="title">
+        <span>Post-Pack Processing (packed frame)</span>
+        <app-field-tip info="Runs on the frame the encoder actually reads: the four stacked tiles of the transport image (per eye a 1:1 gaze cut-out and the whole view downscaled), 9 MP instead of the 109 MP eye textures. Sharpening the periphery here happens AFTER its downscale, where it survives; the fovea tile keeps its own strength. Requires the NVENC Tap. Log: 'NvencPostPack: packed frame ...' and a 'last 10s' pass-time line. Any failure disables it for the session with a log line and the encoder sees the untouched frame." />
+    </div>
+    <div class="control">
+        <mat-slide-toggle [(ngModel)]="settings.postPack.enable" (ngModelChange)="save()"></mat-slide-toggle>
+    </div>
+</div>
+@if(settings.postPack.enable){
+<div class="field">
+    <div class="title">
+        <span>Post-Pack CAS</span>
+        <app-field-tip info="Contrast adaptive sharpening on the packed luma plane, per tile. Turn the pre-encode CAS above off when using this; sharpening twice costs bits for nothing." />
+    </div>
+    <div class="control">
+        <mat-slide-toggle [(ngModel)]="settings.postPack.casEnable" (ngModelChange)="save()"></mat-slide-toggle>
+    </div>
+</div>
+@if(settings.postPack.casEnable){
+<div class="field">
+    <div class="title">
+        <span>Fovea Strength</span>
+        <app-field-tip info="Sharpening for the gaze cut-out tile (1:1 render-target pixels), 0 to 1. Under CBR sharpening costs bits: spend them here." />
+        <app-reset-button [canReset]="settings.postPack.foveaStrength != 0.6" (resetClick)="settings.postPack.foveaStrength = 0.6; save()"></app-reset-button>
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="settings.postPack.foveaStrength" step="0.05" (ngModelChange)="save()" type="number">
+        <mat-slider max="1" min="0" step="0.05">
+            <input matSliderThumb [(ngModel)]="settings.postPack.foveaStrength" (ngModelChange)="save()">
+        </mat-slider>
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Periphery Strength</span>
+        <app-field-tip info="Sharpening for the downscaled whole-view tile, 0 to 1. Applied after the downscale, so it is visible on the panel; keep it lower than the fovea to avoid haloing on the stretched periphery." />
+        <app-reset-button [canReset]="settings.postPack.peripheryStrength != 0.3" (resetClick)="settings.postPack.peripheryStrength = 0.3; save()"></app-reset-button>
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="settings.postPack.peripheryStrength" step="0.05" (ngModelChange)="save()" type="number">
+        <mat-slider max="1" min="0" step="0.05">
+            <input matSliderThumb [(ngModel)]="settings.postPack.peripheryStrength" (ngModelChange)="save()">
+        </mat-slider>
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Fovea Edge Falloff</span>
+        <app-field-tip info="Fraction of the fovea tile (0 to 0.5) over which its sharpening ramps down to the periphery strength at the tile border, so the seam where the headset composites the cut-out over the stretched periphery is not a sharpness step. 0 = hard edge. Raise if a halo is visible around the fovea region." />
+        <app-reset-button [canReset]="settings.postPack.edgeFalloff != 0.12" (resetClick)="settings.postPack.edgeFalloff = 0.12; save()"></app-reset-button>
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="settings.postPack.edgeFalloff" step="0.02" (ngModelChange)="save()" type="number">
+        <mat-slider max="0.5" min="0" step="0.02">
+            <input matSliderThumb [(ngModel)]="settings.postPack.edgeFalloff" (ngModelChange)="save()">
+        </mat-slider>
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Fovea Tile On Top</span>
+        <app-field-tip info="Which tile of each eye's pair is the gaze cut-out. On = upper tile (what the streamer's shader indicates). If the wrong region looks sharpened - e.g. periphery crisp, fovea soft - flip this." />
+    </div>
+    <div class="control">
+        <mat-slide-toggle [(ngModel)]="settings.postPack.foveaTop" (ngModelChange)="save()"></mat-slide-toggle>
+    </div>
+</div>
+}
+<div class="field">
+    <div class="title">
+        <span>Limited Range Remap (black floor probe)</span>
+        <app-field-tip info="The streamer produces full-range video; the headset handles full-range imperfectly (black floor). This remaps luma to 16-235 and chroma to 16-240 on the packed frame and clears the stream's full-range flag, so the decoder expands it back on its standard path. With 10-bit the precision cost is nil. Compare a dark gradient with it on and off; turn the Black Floor shadow lift off while testing." />
+    </div>
+    <div class="control">
+        <mat-slide-toggle [(ngModel)]="settings.postPack.limitedRange" (ngModelChange)="save()"></mat-slide-toggle>
+    </div>
+</div>
 }
 
 <div class="field">
@@ -1568,12 +1799,79 @@
 
 <div class="field">
     <div class="title">
-        <span>NVENC Tap (observe only)</span>
-        <app-field-tip info="Diagnostic that watches how the streamer sets up its video encoder: resolution, frame rate, rate-control parameters, and which GPU textures it feeds the encoder directly. Changes NOTHING - it only writes log lines. Turn it on BEFORE launching SteamVR (the encoder is created early and would otherwise be missed); changing the stream resolution mid-session also forces the encoder to be recreated and observed. One disposable session with this on gives the data for both the direct-encode zero-copy variant and the black-floor/banding encoder work." />
-        <app-reset-button [canReset]="settings.nvencTap != defaults.nvencTap" (resetClick)="reset('nvencTap')"></app-reset-button>
+        <span>NVENC (retired): AQ Strength</span>
+        <app-field-tip info="DO NOT USE. Any spatial AQ, at any strength, makes nvEncEncodePicture block 4-6 ms per frame on these tall frames and trips the streamer's 10 ms watchdog (encoder resets, soft key frames, storms). Migration forces it to 0." />
+        <app-reset-button [canReset]="settings.nvencAqStrength != defaults.nvencAqStrength" (resetClick)="reset('nvencAqStrength')"></app-reset-button>
     </div>
     <div class="control">
-        <mat-slide-toggle [(ngModel)]="settings.nvencTap" (ngModelChange)="save()"></mat-slide-toggle>
+        <input matInput [(ngModel)]="settings.nvencAqStrength" step="1" min="0" max="15" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>NVENC (retired): Max QP</span>
+        <app-field-tip info="Quality floor per block (0 = off). Fights CBR; can overshoot the 2 MB frame limit in complex scenes." />
+        <app-reset-button [canReset]="settings.nvencMaxQp != defaults.nvencMaxQp" (resetClick)="reset('nvencMaxQp')"></app-reset-button>
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="settings.nvencMaxQp" step="1" min="0" max="51" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>NVENC (retired): Min QP / Min QP intra</span>
+        <app-field-tip info="Inert under CBR (the key-frame budget does the containment). Only meaningful with Force CBR off." />
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="settings.nvencMinQp" step="1" min="0" max="51" (ngModelChange)="save()" type="number"> <input matInput [(ngModel)]="settings.nvencMinQpIntra" step="1" min="0" max="51" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>NVENC (retired): Bitrate Follows Streamer Backoff</span>
+        <app-field-tip info="Always on. The streamer's per-frame request is its real rate control; replacing it outright (off) starves the pacer (R3)." />
+        <app-reset-button [canReset]="settings.nvencBitrateScale != defaults.nvencBitrateScale" (resetClick)="reset('nvencBitrateScale')"></app-reset-button>
+    </div>
+    <div class="control">
+        <mat-slide-toggle [(ngModel)]="settings.nvencBitrateScale" (ngModelChange)="save()"></mat-slide-toggle>
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>NVENC (retired): True Preset Merge</span>
+        <app-field-tip info="Adopts the canonical preset's multipass / AQ / ref settings besides the preset GUID. Left on; one A/B (P7 with it off) was never run." />
+        <app-reset-button [canReset]="settings.nvencPresetMerge != defaults.nvencPresetMerge" (resetClick)="reset('nvencPresetMerge')"></app-reset-button>
+    </div>
+    <div class="control">
+        <mat-slide-toggle [(ngModel)]="settings.nvencPresetMerge" (ngModelChange)="save()"></mat-slide-toggle>
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>NVENC (retired): VUI Full Range / Matrix / Primaries / Transfer</span>
+        <app-field-tip info="-1 leaves the streamer's tags. The correct BT.709 tags (1/1/1) make the client render dim and saturated - the client mishandles explicit tags, so these stay inert until the APK changes." />
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="settings.nvencVuiFullRange" step="1" min="-1" max="1" (ngModelChange)="save()" type="number"> <input matInput [(ngModel)]="settings.nvencVuiMatrix" step="1" min="-1" max="14" (ngModelChange)="save()" type="number"> <input matInput [(ngModel)]="settings.nvencVuiPrimaries" step="1" min="-1" max="22" (ngModelChange)="save()" type="number"> <input matInput [(ngModel)]="settings.nvencVuiTransfer" step="1" min="-1" max="18" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>vrlink (retired): Encode Width</span>
+        <app-field-tip info="No observable effect in foveated mode (the streamer's sampling shader never reads it); written as 3072 for compatibility." />
+        <app-reset-button [canReset]="galaxyXr.customEncodeWidth != 3072" (resetClick)="galaxyXr.customEncodeWidth = 3072; save()"></app-reset-button>
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="galaxyXr.customEncodeWidth" step="256" min="512" max="8192" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>vrlink (retired): Max Video Queue Latency (us) / Backoff Recovery Coefficient</span>
+        <app-field-tip info="Undocumented streamer keys found in driver_vrlink.dll. No measurable effect in A/B (V1/V2). 0 leaves the streamer's defaults." />
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="galaxyXr.vrlinkMaxVideoQueueLatencyUs" step="1000" min="0" max="200000" (ngModelChange)="save()" type="number"> <input matInput [(ngModel)]="galaxyXr.vrlinkBackoffRecoveryCoefficient" step="0.1" min="0" max="100" (ngModelChange)="save()" type="number">
     </div>
 </div>
 
