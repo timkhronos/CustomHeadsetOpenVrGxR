@@ -39,6 +39,7 @@ struct GxrStreamTier {
 static const GxrStreamTier kGxrStreamTiers[] = {
 	{"efficient", 1536, 300},
 	{"balanced",  1536, 350},
+	{"vivid",     1536, 400},
 	{"sharp",     1536, 450},
 	// wider fovea box and a sharper periphery for 78% more encode work; on
 	// current hardware the allocator starves it (encode-limited). kept for

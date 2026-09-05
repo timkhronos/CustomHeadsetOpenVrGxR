@@ -1728,6 +1728,10 @@ bool FrameProcessor::ProcessSceneLayer(vr::SharedTextureHandle_t leftEye, vr::Sh
 			NvencPostPack::SetConfig(pc);
 		}
 		tc.splitMode = settings.config.nvencSplitMode;
+		tc.qpFovea = (std::max)(-10, (std::min)(0, settings.config.nvencQpFovea));
+		tc.qpPeriphery = (std::max)(0, (std::min)(10, settings.config.nvencQpPeriphery));
+		tc.qpEdgeFalloff = (float)settings.config.postPack.edgeFalloff;
+		tc.qpFoveaTop = settings.config.postPack.foveaTop;
 		tc.verbose = settings.config.nvencVerbose;
 		NvencTap::Get().SetConfig(tc);
 		if(tc.enabled){

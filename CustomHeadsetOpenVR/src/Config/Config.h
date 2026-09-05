@@ -230,13 +230,13 @@ struct StreamFrameDistortionConfig{
 // 9.4 MP NV12/P010 frame right before the encoder reads it, instead of on
 // the 109 MP eye textures. requires the NVENC tap.
 struct StreamFramePostPackConfig{
-	bool enable = false;
+	bool enable = true; // v4 default: post-pack CAS is the sharpening path on NVIDIA
 	bool casEnable = true;
 	double foveaStrength = 0.6;     // 0..1, the 1:1 gaze cut-out tile
 	double peripheryStrength = 0.3; // 0..1, the downscaled whole-view tile (sharpened after its downscale)
 	bool foveaTop = true;           // fovea tile is the upper of each eye's pair (from vrlink's shader); flip if the overlay says otherwise
 	double edgeFalloff = 0.12;      // fraction of the fovea tile over which sharpening ramps down to the periphery strength (seam softening)
-	bool limitedRange = false;      // Y 16..235 / C 16..240 + VUI full-range flag cleared: the decoder's well-trodden path (black floor probe)
+	bool limitedRange = true;       // Y 16..235 / C 16..240 + VUI full-range flag cleared. 09-06: FIXES the black floor with the xrvst2ue-identity APK
 };
 
 struct StreamFrameCASConfig{
@@ -292,6 +292,10 @@ struct GalaxyXrConfig{
 	// currently makes SteamVR fall back to generic Touch handling.
 	// requires a SteamVR restart.
 	bool nativeInputProfile = false;
+	// 2026-09-06: create /input/grip/touch from grip/value (vrlink does not
+	// send a grip capacitive state for these controllers). native profile only.
+	bool synthesizeGripTouch = true;
+	double gripTouchThreshold = 0.03; // grip value that counts as "touched" (release at half of it)
 	// write driver_vrlink.overrideRenderWidth/Height = 3552x3840 (the Galaxy
 	// XR native per-eye panel geometry) into steamvr.vrsettings. the APK's
 	// spoofed identity makes vrlink cap the render target at the spoofed
@@ -353,7 +357,7 @@ struct GalaxyXrConfig{
 	// maximum" the community measured as 1536; we raise it so the tiers
 	// above 1536 are not clamped. 3584 = next 256-multiple above the panel.
 	int profileMaxStreamFormatWidth = 0; // v3: unused, the profile max tracks the tile width (kept so old files parse)
-	bool profileSupports10bit = false; // the client cannot decode 10-bit (09-03 run 1: ~15 fps, continuous resets)
+	bool profileSupports10bit = true; // 09-05: the current APK decodes Main10 at full rate (A/B: fewer resets than 8-bit); older APKs could not
 	// also write the global driver_vrlink.force10bit ("Warning: Driver
 	// forcing 10bit mode via 'force10bit' setting."), the belt to the
 	// profile's braces. the community tool used to set it, then removed it.
@@ -819,6 +823,12 @@ struct StreamFrameConfig{
 	// 15 = disable split (probe). requires passing 12.1-versioned structs
 	// into vrlink's 11.1 session; rejection is logged and latched off.
 	int nvencSplitMode = 1; // v3 default: driver-chosen strips (RUN6/X2); implies the 12.1 session upgrade
+	// 2026-09-05 foveated bit allocation (option, off by default): QP delta
+	// for the fovea tile (<= 0) and the periphery tile (>= 0), with the
+	// post-pack edge ramp; bits move within the same CBR budget. see
+	// NvencTapConfig::qpFovea.
+	int nvencQpFovea = 0;
+	int nvencQpPeriphery = 0;
 	// log every reconfigure + hex dumps
 	bool nvencVerbose = false;
 	// 5 = kalmanCAM ("kalmanCAM"): mode 4 with the fast magnitude channel

@@ -568,6 +568,19 @@ void GalaxyXRControllerShim::PosTrackedDeviceActivate(uint32_t &unObjectId, vr::
 // the shipped remapping json (in the driver's resource dir, so it survives
 // rebuilds as long as the flag is set). SteamVR reads the file at startup.
 static void SyncTouchLayout(){
+	// 2026-09-05: the official profile's remapping shipped WITHOUT an
+	// oculus_touch layout. OpenXR apps that suggest the Touch interaction
+	// profile (Pools VR: "Created default binding ... Controller type
+	// 'oculus_touch'") and OpenVR apps with Touch bindings then had no
+	// route to galaxy_xr_controller: no controllers at all in Pools, and
+	// thumbstick click / trigger touch lost through the knuckles
+	// autoremapping fallback. galaxy_xr_controller declares exactly the
+	// Touch component set, so the layout is the identity form
+	// ("remappings": [], simulate_controller_type) the working Samsung
+	// profile uses. it is now shipped in the json AND repaired here (older
+	// resource dirs, or the autoremapping-style layout an earlier build
+	// wrote). simulateTouch only controls the render-model / HMD
+	// simulation flags on that layout.
 	static bool synced = false;
 	if(synced){ return; }
 	synced = true;
@@ -582,46 +595,35 @@ static void SyncTouchLayout(){
 		}
 		if(!j.contains("layouts") || !j["layouts"].is_array()){ return; }
 		nlohmann::json &layouts = j["layouts"];
-		int touchIndex = -1;
-		int knucklesIndex = -1;
+		bool sim = driverConfig.galaxyXr.simulateTouch;
+		nlohmann::json touch = {
+			{"priority", 100}, // knuckles (110) leads, then Touch, then generic/hands/wands
+			{"from_controller_type", "oculus_touch"},
+			{"simulate_controller_type", true},
+			{"simulate_render_model", sim},
+			{"simulate_HMD", sim},
+			{"remappings", nlohmann::json::array()},
+		};
+		int touchIndex = -1, knucklesIndex = -1;
 		for(int i = 0; i < (int)layouts.size(); i++){
 			std::string from = layouts[i].value("from_controller_type", "");
 			if(from == "oculus_touch"){ touchIndex = i; }
 			if(from == "knuckles"){ knucklesIndex = i; }
 		}
-		bool want = driverConfig.galaxyXr.simulateTouch;
 		bool changed = false;
-		if(want && touchIndex < 0){
-			nlohmann::json touch = {
-				{"priority", 95},
-				{"from_controller_type", "oculus_touch"},
-				{"simulate_controller_type", true},
-				{"simulate_render_model", true},
-				{"simulate_HMD", true},
-				{"autoremappings", nlohmann::json::array({
-					{{"from", "/user/hand/right/input/grip"}, {"to", "/user/hand/right/input/grip"}},
-					{{"from", "/user/hand/right/input/trigger"}, {"to", "/user/hand/right/input/trigger"}},
-					{{"from", "/user/hand/right/input/joystick"}, {"to", "/user/hand/right/input/joystick"}},
-					{{"from", "/user/hand/right/input/thumbrest"}, {"to", "/user/hand/right/input/thumbrest"}},
-					{{"from", "/user/hand/left/input/x"}, {"to", "/user/hand/left/input/x"}, {"mirror", false}},
-					{{"from", "/user/hand/left/input/y"}, {"to", "/user/hand/left/input/y"}, {"mirror", false}},
-					{{"from", "/user/hand/right/input/a"}, {"to", "/user/hand/right/input/a"}, {"mirror", false}},
-					{{"from", "/user/hand/right/input/b"}, {"to", "/user/hand/right/input/b"}, {"mirror", false}},
-					{{"from", "/user/hand/left/input/system"}, {"to", "/user/hand/left/input/system"}, {"mirror", false}},
-				})},
-			};
-			int insertAt = knucklesIndex >= 0 ? knucklesIndex : (int)layouts.size();
-			layouts.insert(layouts.begin() + insertAt, touch);
+		if(touchIndex < 0){
+			// right after the knuckles layout (or first if there is none)
+			layouts.insert(layouts.begin() + (knucklesIndex >= 0 ? knucklesIndex + 1 : 0), touch);
 			changed = true;
-		}else if(!want && touchIndex >= 0){
-			layouts.erase(layouts.begin() + touchIndex);
+		}else if(layouts[touchIndex] != touch){
+			layouts[touchIndex] = touch;
 			changed = true;
 		}
 		if(changed){
 			std::ofstream out(path, std::ios::trunc);
 			out << j.dump(2) << "\n";
-			DriverLog("GalaxyXRControllerShim: remapping oculus_touch layout %s (simulateTouch=%d; effective next SteamVR start)",
-				want ? "added" : "removed", want ? 1 : 0);
+			DriverLog("GalaxyXRControllerShim: remapping oculus_touch identity layout %s (simulateTouch=%d; effective next SteamVR start)",
+				touchIndex < 0 ? "added" : "repaired", sim ? 1 : 0);
 		}
 	}catch(const std::exception &e){
 		DriverLog("GalaxyXRControllerShim: remapping sync failed: %s", e.what());

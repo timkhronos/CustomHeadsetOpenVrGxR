@@ -1,5 +1,6 @@
 #include "ConfigLoader.h"
 #include <map>
+#include <algorithm>
 #include <thread>
 #include <fstream>
 #include <filesystem>
@@ -386,6 +387,12 @@ void ConfigLoader::ParseConfig(){
 			}
 			if(galaxyXrData["nativeInputProfile"].is_boolean()){
 				newConfig.galaxyXr.nativeInputProfile = galaxyXrData["nativeInputProfile"].get<bool>();
+			}
+			if(galaxyXrData["synthesizeGripTouch"].is_boolean()){
+				newConfig.galaxyXr.synthesizeGripTouch = galaxyXrData["synthesizeGripTouch"].get<bool>();
+			}
+			if(galaxyXrData["gripTouchThreshold"].is_number()){
+				newConfig.galaxyXr.gripTouchThreshold = galaxyXrData["gripTouchThreshold"].get<double>();
 			}
 			if(galaxyXrData["nativeResolution"].is_boolean()){
 				newConfig.galaxyXr.nativeResolution = galaxyXrData["nativeResolution"].get<bool>();
@@ -946,6 +953,12 @@ void ConfigLoader::ParseConfig(){
 			if(streamFrameData["nvencSplitMode"].is_number()){
 				newConfig.streamFrame.nvencSplitMode = streamFrameData["nvencSplitMode"].get<int>();
 			}
+			if(streamFrameData["nvencQpFovea"].is_number()){
+				newConfig.streamFrame.nvencQpFovea = streamFrameData["nvencQpFovea"].get<int>();
+			}
+			if(streamFrameData["nvencQpPeriphery"].is_number()){
+				newConfig.streamFrame.nvencQpPeriphery = streamFrameData["nvencQpPeriphery"].get<int>();
+			}
 			if(streamFrameData["nvencVerbose"].is_boolean()){
 				newConfig.streamFrame.nvencVerbose = streamFrameData["nvencVerbose"].get<bool>();
 			}
@@ -1441,7 +1454,23 @@ void ConfigLoader::ParseConfig(){
 				DriverLog("Config: stream quality '%s' -> '%s' (legacy tier name)", g.streamQuality.c_str(), canon.c_str());
 				g.streamQuality = canon;
 			}
+			// once per process: if a file is rewritten under us without the
+			// stamp, do not re-apply defaults over what the user has set since
+			static bool migratedThisProcess = false;
+			if(migratedThisProcess && sf.nvencSettingsVersion < 4){ sf.nvencSettingsVersion = 4; }
+			// 2026-09-05: and once per INSTALL. the GUI omits values equal to
+			// its defaults when it saves, and an older GUI build (or an old GUI
+			// process still running across a driver rebuild) drops the stamp
+			// from settings.json on every save. a marker file next to it,
+			// which the GUI never writes, is the authority: if it exists the
+			// migration has already happened and the settings are the user's.
+			const std::string markerPath = GetConfigFolder() + "nvenc-settings-v4.migrated";
+			if(sf.nvencSettingsVersion < 4 && std::filesystem::exists(markerPath)){
+				sf.nvencSettingsVersion = 4;
+			}
+			bool nvencMigrated = false;
 			if(sf.nvencSettingsVersion < 3){
+				nvencMigrated = true;
 				const StreamFrameConfig d = {};
 				bool hadAq = sf.nvencAqStrength > 0;
 				sf.nvencTap = d.nvencTap; sf.nvencFixLevel = d.nvencFixLevel; sf.nvencForceCbr = d.nvencForceCbr;
@@ -1453,10 +1482,68 @@ void ConfigLoader::ParseConfig(){
 				sf.nvencVuiFullRange = -1; sf.nvencVuiMatrix = -1; sf.nvencVuiPrimaries = -1; sf.nvencVuiTransfer = -1;
 				sf.nvencBitrateMbit = 0; sf.nvencBandwidthOverrideMbit = 0;
 				if(g.customStreamFormatWidth > 2048 || g.customStreamFormatWidth < 512){ g.customStreamFormatWidth = 1536; }
-				g.force10bit = false; g.profileSupports10bit = false; g.vrlinkHeadsetProfile = true;
+				g.force10bit = false; g.vrlinkHeadsetProfile = true; // profileSupports10bit: the user's choice stays
 				sf.nvencSettingsVersion = 3;
 				DriverLog("Config: NVENC settings migrated to v3 defaults (tap on, P auto, CBR, VBV 2, KF 2, headroom 0, fps 90, split auto, AQ/floors/VUI cleared%s); tier '%s'",
 					hadAq ? " - spatial AQ was set and is now OFF: it serialized the encoder" : "", g.streamQuality.c_str());
+			}
+			// v4: post-pack CAS replaces the pre-encode CAS when the tap is on
+			if(sf.nvencSettingsVersion < 4){
+				nvencMigrated = true;
+				if(sf.nvencTap){
+					if(sf.cas.enable){
+						sf.postPack.foveaStrength = (std::max)(0.6, (std::min)(1.0, sf.cas.strength));
+						sf.cas.enable = false;
+						DriverLog("Config: pre-encode CAS -> post-pack CAS (fovea %.2f); the pre-encode pass is off", sf.postPack.foveaStrength);
+					}
+					sf.postPack.enable = true; sf.postPack.casEnable = true;
+				}
+				sf.nvencSettingsVersion = 4;
+			}
+			// never both sharpening passes
+			if(sf.nvencTap && sf.postPack.enable && sf.postPack.casEnable && sf.cas.enable){
+				sf.cas.enable = false;
+				DriverLog("Config: pre-encode CAS disabled (post-pack CAS is on)");
+			}
+			// 2026-09-06: persist the migration. it used to live in memory only,
+			// so every start re-applied the defaults over the file until the
+			// GUI happened to save - and one of those defaults is
+			// profileSupports10bit=false, which silently undid the user's
+			// 10-bit toggle. write the migrated encoder/profile values and the
+			// version stamp back into settings.json once; the file watcher
+			// reloads it and the stamp stops this block from running again.
+			if(nvencMigrated){ migratedThisProcess = true; }
+			if(nvencMigrated && data.is_object()){
+				try{
+					json &jsf = data["streamFrame"]; json &jg = data["galaxyXr"];
+					if(!jsf.is_object()){ jsf = json::object(); }
+					if(!jg.is_object()){ jg = json::object(); }
+					jsf["nvencSettingsVersion"] = sf.nvencSettingsVersion;
+					jsf["nvencTap"] = sf.nvencTap; jsf["nvencFixLevel"] = sf.nvencFixLevel; jsf["nvencForceCbr"] = sf.nvencForceCbr;
+					jsf["nvencVbvFrames"] = sf.nvencVbvFrames; jsf["nvencLowDelayKfScale"] = sf.nvencLowDelayKfScale;
+					jsf["nvencMaxBitrateHeadroomPct"] = sf.nvencMaxBitrateHeadroomPct; jsf["nvencForceFps"] = sf.nvencForceFps;
+					jsf["nvencBitrateScale"] = sf.nvencBitrateScale; jsf["nvencPresetMerge"] = sf.nvencPresetMerge;
+					jsf["nvencSplitMode"] = sf.nvencSplitMode; jsf["nvencPreset"] = sf.nvencPreset;
+					jsf["nvencAqStrength"] = 0; jsf["nvencMinQp"] = 0; jsf["nvencMinQpIntra"] = 0; jsf["nvencMaxQp"] = 0;
+					jsf["nvencVuiFullRange"] = -1; jsf["nvencVuiMatrix"] = -1; jsf["nvencVuiPrimaries"] = -1; jsf["nvencVuiTransfer"] = -1;
+					jsf["nvencBitrateMbit"] = 0; jsf["nvencBandwidthOverrideMbit"] = 0;
+					if(!jsf["cas"].is_object()){ jsf["cas"] = json::object(); }
+					jsf["cas"]["enable"] = sf.cas.enable;
+					jsf["postPack"] = {
+						{"enable", sf.postPack.enable}, {"casEnable", sf.postPack.casEnable},
+						{"foveaStrength", sf.postPack.foveaStrength}, {"peripheryStrength", sf.postPack.peripheryStrength},
+						{"foveaTop", sf.postPack.foveaTop}, {"edgeFalloff", sf.postPack.edgeFalloff}, {"limitedRange", sf.postPack.limitedRange},
+					};
+					jg["streamQuality"] = g.streamQuality; jg["customStreamFormatWidth"] = g.customStreamFormatWidth;
+					jg["force10bit"] = false; jg["profileSupports10bit"] = g.profileSupports10bit; jg["vrlinkHeadsetProfile"] = g.vrlinkHeadsetProfile;
+					configFile.close();
+					std::ofstream out(configPath, std::ios::trunc);
+					out << data.dump(2) << "\n";
+					{ std::ofstream marker(markerPath, std::ios::trunc); marker << "nvenc settings migrated to v" << sf.nvencSettingsVersion << "; delete this file to re-run the migration\n"; }
+					DriverLog("Config: migration written back to %s (nvencSettingsVersion %d) and marker %s created; it will not run again", configPath.c_str(), sf.nvencSettingsVersion, markerPath.c_str());
+				}catch(const std::exception &e){
+					DriverLog("Config: could not persist the migration: %s (it will re-run at the next start)", e.what());
+				}
 			}
 		}
 		// write to global config
@@ -1792,7 +1879,7 @@ void ConfigLoader::WriteInfo(){
 				{"zeroCopyV3", defaultSettings.streamFrame.zeroCopyV3},
 				{"nvencTap", defaultSettings.streamFrame.nvencTap},
 				{"nvencBandwidthOverrideMbit", defaultSettings.streamFrame.nvencBandwidthOverrideMbit},
-				{"nvencSettingsVersion", 3},
+				{"nvencSettingsVersion", 0}, // 0 on purpose: the GUI omits values equal to these defaults when saving; the real stamp (4) must differ or it is dropped
 				{"nvencFixLevel", defaultSettings.streamFrame.nvencFixLevel},
 				{"nvencBitrateMbit", defaultSettings.streamFrame.nvencBitrateMbit},
 				{"nvencMaxQp", defaultSettings.streamFrame.nvencMaxQp},
@@ -1813,6 +1900,8 @@ void ConfigLoader::WriteInfo(){
 				{"nvencVuiPrimaries", defaultSettings.streamFrame.nvencVuiPrimaries},
 				{"nvencVuiTransfer", defaultSettings.streamFrame.nvencVuiTransfer},
 				{"nvencSplitMode", defaultSettings.streamFrame.nvencSplitMode},
+				{"nvencQpFovea", defaultSettings.streamFrame.nvencQpFovea},
+				{"nvencQpPeriphery", defaultSettings.streamFrame.nvencQpPeriphery},
 				{"nvencVerbose", defaultSettings.streamFrame.nvencVerbose},
 				{"velocityFixMode", defaultSettings.streamFrame.velocityFixMode == 6 ? "kalmanCA" : (defaultSettings.streamFrame.velocityFixMode == 5 ? "kalmanCAM" : (defaultSettings.streamFrame.velocityFixMode == 4 ? "kalman" : (defaultSettings.streamFrame.velocityFixMode == 3 ? "derive" : (defaultSettings.streamFrame.velocityFixMode == 2 ? "full" : (defaultSettings.streamFrame.velocityFixMode == 1 ? "classic" : "off")))))},
 				{"deriveSmoothTauSlowMs", defaultSettings.streamFrame.deriveSmoothTauSlowMs},

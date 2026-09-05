@@ -8,6 +8,8 @@
 #include <chrono>
 #include <set>
 #include <map>
+#include <vector>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
@@ -83,6 +85,43 @@ std::mutex resLock;
 struct RegInfo { void* texture; uint32_t fmt; uint32_t type; };
 std::map<void*, RegInfo> registered;   // NV_ENC_REGISTERED_PTR -> texture
 std::map<void*, void*> mappedToReg;    // NV_ENC_INPUT_PTR (mapped) -> NV_ENC_REGISTERED_PTR
+// ---- foveated QP delta map ----
+// one signed byte per 32x32 block (HEVC CTB), row-major, rebuilt when the
+// frame size or the deltas change. the frame is N stacked square tiles of
+// width w; fovea tiles are the even (or odd) ones.
+std::mutex qpLock;
+std::vector<int8_t> qpMap;
+uint32_t qpMapW = 0, qpMapH = 0; int qpMapFov = 0, qpMapPer = 0; float qpMapFall = -1; bool qpMapTop = true;
+const int8_t* GetQpMap(uint32_t w, uint32_t h, const NvencTapConfig &cfg, uint32_t* size){
+	std::lock_guard<std::mutex> g(qpLock);
+	if(w != qpMapW || h != qpMapH || cfg.qpFovea != qpMapFov || cfg.qpPeriphery != qpMapPer || cfg.qpEdgeFalloff != qpMapFall || cfg.qpFoveaTop != qpMapTop){
+		qpMapW = w; qpMapH = h; qpMapFov = cfg.qpFovea; qpMapPer = cfg.qpPeriphery; qpMapFall = cfg.qpEdgeFalloff; qpMapTop = cfg.qpFoveaTop;
+		const uint32_t bw = (w + 31) / 32, bh = (h + 31) / 32;
+		qpMap.assign((size_t)bw * bh, 0);
+		const float tile = (float)w; // square tiles
+		for(uint32_t by = 0; by < bh; by++){
+			for(uint32_t bx = 0; bx < bw; bx++){
+				float px = bx * 32.f + 16.f, py = by * 32.f + 16.f;
+				int t = (int)(py / tile);
+				bool fovea = ((t & 1) == 0) == cfg.qpFoveaTop;
+				float v = (float)cfg.qpPeriphery;
+				if(fovea){
+					float ix = px / tile, iy = py / tile - t;
+					float d = (std::min)((std::min)(ix, 1.f - ix), (std::min)(iy, 1.f - iy));
+					float k = cfg.qpEdgeFalloff > 0 ? (std::min)(1.f, d / cfg.qpEdgeFalloff) : 1.f;
+					k = k * k * (3.f - 2.f * k);
+					v = (float)cfg.qpPeriphery + ((float)cfg.qpFovea - (float)cfg.qpPeriphery) * k;
+				}
+				qpMap[(size_t)by * bw + bx] = (int8_t)std::lround(v);
+			}
+		}
+		DriverLog("NvencTap: QP delta map rebuilt %ux%u blocks (fovea %d, periphery %d, ramp %.2f)", bw, bh, cfg.qpFovea, cfg.qpPeriphery, cfg.qpEdgeFalloff);
+	}
+	*size = (uint32_t)qpMap.size();
+	return qpMap.data();
+}
+inline bool QpMapWanted(const NvencTapConfig &cfg){ return cfg.enabled && (cfg.qpFovea != 0 || cfg.qpPeriphery != 0); }
+
 bool LookupInputTexture(void* input, void** texture, uint32_t* fmt){
 	std::lock_guard<std::mutex> g(resLock);
 	auto m = mappedToReg.find(input);
@@ -469,6 +508,10 @@ bool ApplyOverrides(void* encoder, NV_ENC_INITIALIZE_PARAMS* p, const NvencTapCo
 			changed = true;
 		}
 	}
+	if(QpMapWanted(cfg) && c->rcParams.qpMapMode != NV_ENC_QP_MAP_DELTA){
+		w += snprintf(w, WhatRem(w, what, whatLen), "qpMap %u->DELTA; ", (unsigned)c->rcParams.qpMapMode);
+		c->rcParams.qpMapMode = NV_ENC_QP_MAP_DELTA; changed = true;
+	}
 	if(cfg.vbvFrames > 0){
 		NV_ENC_RC_PARAMS &rc = c->rcParams;
 		// nominal rate, never vrlink's per-call estimate (see forceFps)
@@ -692,14 +735,27 @@ NVENCSTATUS NVENCAPI NvencTapShims::EncodePicture(void* encoder, NV_ENC_PIC_PARA
 	}
 	double t0 = NowSecondsNv();
 	NVENCSTATUS st;
+	NvencTapConfig qcfg = NvencTap::Get().GetConfig();
+	const int8_t* qmap = nullptr; uint32_t qsize = 0;
+	if(params && params->inputBuffer && QpMapWanted(qcfg) && params->inputWidth && params->inputHeight){
+		qmap = GetQpMap(params->inputWidth, params->inputHeight, qcfg, &qsize);
+	}
 	if(params && Upgraded(encoder) && Is111(params->version)){
 		// NV_ENC_PIC_PARAMS grew 11.1 -> 12.1: call with a zero-extended
 		// scratch copy so the driver never reads past vrlink's struct
 		alignas(16) unsigned char scratch[kScratch] = {};
 		memcpy(scratch, params, kPicParams11Size);
-		((NV_ENC_PIC_PARAMS*)scratch)->version = Tag121(6, true);
-		st = origEncodePicture(encoder, (NV_ENC_PIC_PARAMS*)scratch);
+		NV_ENC_PIC_PARAMS* sp = (NV_ENC_PIC_PARAMS*)scratch;
+		sp->version = Tag121(6, true);
+		if(qmap){ sp->qpDeltaMap = (int8_t*)qmap; sp->qpDeltaMapSize = qsize; std::lock_guard<std::mutex> g(statsLock); stats.qpMapFrames++; }
+		st = origEncodePicture(encoder, sp);
 		{ std::lock_guard<std::mutex> g(statsLock); stats.retagCalls++; }
+	}else if(params && qmap){
+		int8_t* savedMap = params->qpDeltaMap; uint32_t savedSize = params->qpDeltaMapSize;
+		params->qpDeltaMap = (int8_t*)qmap; params->qpDeltaMapSize = qsize;
+		{ std::lock_guard<std::mutex> g(statsLock); stats.qpMapFrames++; }
+		st = origEncodePicture(encoder, params);
+		params->qpDeltaMap = savedMap; params->qpDeltaMapSize = savedSize;
 	}else{
 		st = origEncodePicture(encoder, params);
 	}
@@ -985,6 +1041,9 @@ void NvencTap::MaybeHeartbeat(){
 				pp.frames ? pp.sumMs / pp.frames : 0.0, pp.maxMs, pp.disabled ? " | DISABLED (see earlier line)" : "");
 			NvencPostPack::ResetIntervalStats();
 		}
+	}
+	if(QpMapWanted(c)){
+		DriverLog("NvencTap: foveated QP: fovea %d periphery %d, %u frames with map", c.qpFovea, c.qpPeriphery, s.qpMapFrames);
 	}
 	if(c.splitMode > 0 || s.splitState || s.sessionUpgrade){
 		DriverLog("NvencTap: split-frame: mode %d state %s applied %u (status %u) engines=%u | session upgrade %s (status %u) retagged calls %u", c.splitMode,

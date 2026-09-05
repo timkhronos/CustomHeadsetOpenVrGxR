@@ -40,7 +40,8 @@
         <mat-select [(ngModel)]="galaxyXr.streamQuality" (ngModelChange)="save()" style="width: 300px;">
             <mat-option value="efficient">Efficient &mdash; 1536 tile, 300 Mbit/s (any link)</mat-option>
             <mat-option value="balanced">Balanced &mdash; 1536 tile, 350 Mbit/s (recommended)</mat-option>
-            <mat-option value="sharp">Sharp &mdash; 1536 tile, 450 Mbit/s (good 6 GHz link)</mat-option>
+            <mat-option value="vivid">Vivid &mdash; 1536 tile, 400 Mbit/s</mat-option>
+            <mat-option value="sharp">Sharp &mdash; 1536 tile, 450 Mbit/s (good 6 GHz link, headset permitting)</mat-option>
             <mat-option value="max">Max &mdash; 2048 tile, 450 Mbit/s (encode-limited on current GPUs)</mat-option>
             <mat-option value="custom">Custom &mdash; set tile and bandwidth yourself</mat-option>
         </mat-select>
@@ -84,10 +85,10 @@
 <div class="field">
     <div class="title">
         <span>Profile: Supports 10-bit</span>
-        <app-field-tip info="Writes supports10bit in the profile. The APK can't currently decode 10-bit HEVC (measured: ~15 fps and continuous stream resets), so enabling it would be a waste. Kept in place for a future client." />
+        <app-field-tip info="10-bit HEVC (Main10). Smoother gradients at the expense of slightly higher decode load." />
     </div>
     <div class="control">
-        <mat-slide-toggle [(ngModel)]="galaxyXr.profileSupports10bit" (ngModelChange)="save()" [disabled]="true"></mat-slide-toggle>
+        <mat-slide-toggle [(ngModel)]="galaxyXr.profileSupports10bit" (ngModelChange)="save()"></mat-slide-toggle>
     </div>
 </div>
 <div class="field">
@@ -163,6 +164,27 @@
     </div>
     <div class="control">
         <input matInput [(ngModel)]="settings.nvencSplitMode" step="1" min="0" max="15" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Foveated QP: Fovea / Periphery Delta</span>
+        <app-field-tip info="Moves bits within the same bitrate: a QP offset per block, negative for the gaze cut-out tile (finer, more bits) and positive for the periphery tile (coarser, fewer bits), blended over the same edge falloff as the sharpening. 0 / 0 = off. Small values (-2 / 2, -3 / 3) work; large ones starve the whole frame." />
+        <app-reset-button [canReset]="settings.nvencQpFovea != 0 || settings.nvencQpPeriphery != 0" (resetClick)="settings.nvencQpFovea = 0; settings.nvencQpPeriphery = 0; save()"></app-reset-button>
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="settings.nvencQpFovea" step="1" min="-10" max="0" (ngModelChange)="save()" type="number">
+        <input matInput [(ngModel)]="settings.nvencQpPeriphery" step="1" min="0" max="10" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Limited Range Video (fixes the black floor)</span>
+        <app-field-tip info="Steam Link produces full-range video; the Galaxy XR client handles full-range imperfectly and lifts the 'black floor'. This remaps luma to 16-235 and chroma to 16-240 on the packed frame and tags the stream as limited range, so the headset expands it on its standard path. Measured to fix the black floor with the xrvst2ue-identity APK (no effect on the older Quest-Pro-identity build). Needs the NVENC Tap." />
+        <app-reset-button [canReset]="settings.postPack.limitedRange != true" (resetClick)="settings.postPack.limitedRange = true; settings.postPack.enable = settings.postPack.enable || true; save()"></app-reset-button>
+    </div>
+    <div class="control">
+        <mat-slide-toggle [(ngModel)]="settings.postPack.limitedRange" (ngModelChange)="settings.postPack.enable = settings.postPack.enable || settings.postPack.limitedRange; save()"></mat-slide-toggle>
     </div>
 </div>
 <div class="field">
@@ -252,6 +274,19 @@
         <mat-slide-toggle [(ngModel)]="galaxyXr.nativeInputProfile" (ngModelChange)="save()"></mat-slide-toggle>
     </div>
 </div>
+@if(galaxyXr.nativeInputProfile){
+<div class="field">
+    <div class="title">
+        <span>Grip Touch From Grip Pressure</span>
+        <app-field-tip info="Steam Link sends no capacitive state for the grip (only its pressure), so the official profile's grip touch never lit. On: the driver creates /input/grip/touch and drives it from the grip value. The threshold is the grip value that counts as touched (release at half of it); lower feels more like a touch sensor but resting fingers may trigger it." />
+        <app-reset-button [canReset]="galaxyXr.synthesizeGripTouch === false || (galaxyXr.gripTouchThreshold !== undefined && galaxyXr.gripTouchThreshold != 0.03)" (resetClick)="galaxyXr.synthesizeGripTouch = true; galaxyXr.gripTouchThreshold = 0.03; save()"></app-reset-button>
+    </div>
+    <div class="control">
+        <mat-slide-toggle [(ngModel)]="galaxyXr.synthesizeGripTouch" (ngModelChange)="save()"></mat-slide-toggle>
+        <input matInput [(ngModel)]="galaxyXr.gripTouchThreshold" step="0.005" min="0.005" max="0.5" (ngModelChange)="save()" type="number">
+    </div>
+</div>
+}
 <div class="field">
     <div class="title">
         <span i18n>Controller Model Size</span>
@@ -795,84 +830,22 @@
 <div class="field">
     <div class="title">
         <span>CAS Sharpening</span>
-        <app-field-tip info="Contrast adaptive sharpening applied before the video encode. One of the most effective quality improvements for streamed headsets." />
+        <app-field-tip info="Contrast adaptive sharpening. POST-PACK (recommended, NVIDIA + NVENC Tap): runs on the frame the encoder actually sends - the foveated transport image - with separate strengths for the gaze region and the periphery; the periphery is sharpened after Steam Link downscales it, so it survives to the panel, at ~0.04 ms per frame. PRE-ENCODE: the older full-resolution pass on the eye textures; only for AMD GPUs or with the NVENC Tap off. Never run both." />
     </div>
     <div class="control">
-        <mat-slide-toggle [(ngModel)]="settings.cas.enable" (ngModelChange)="save()"></mat-slide-toggle>
+        <mat-select [(ngModel)]="casMode" (ngModelChange)="save()" style="width: 300px;">
+            <mat-option value="off">Off</mat-option>
+            <mat-option value="postpack">Post-pack &mdash; on the encoded frame (recommended)</mat-option>
+            <mat-option value="preencode">Pre-encode &mdash; full-resolution pass (AMD / tap off)</mat-option>
+        </mat-select>
     </div>
 </div>
-
-@if(settings.cas.enable){
+@if(casMode === 'postpack' && !settings.nvencTap){
 <div class="field">
-    <div class="title">
-        <span>Per Eye Strength</span>
-        <app-field-tip info="Sharpen each eye independently. Useful when one eye sits slightly off its lens axis (facial asymmetry) and only that eye needs extra sharpening to mask the mild off-axis blur; the other eye is spared the over-sharpening." />
-    </div>
-    <div class="control">
-        <mat-slide-toggle [(ngModel)]="settings.cas.perEye" (ngModelChange)="save()"></mat-slide-toggle>
-    </div>
-</div>
-@if(!settings.cas.perEye){
-<div class="field">
-    <div class="title">
-        <span>CAS Strength</span>
-        <app-field-tip info="Strength of the sharpening from 0 to 1." />
-    </div>
-    <div class="control">
-        <input matInput [(ngModel)]="settings.cas.strength" step="0.05" (ngModelChange)="save()" type="number">
-        <mat-slider max="1" min="0" step="0.05">
-            <input matSliderThumb [(ngModel)]="settings.cas.strength" (ngModelChange)="save()">
-        </mat-slider>
-    </div>
+    <div class="note">Post-pack sharpening needs the NVENC Tap (Headset &rarr; Encoder). With the tap off nothing is sharpened; choose Pre-encode instead.</div>
 </div>
 }
-@if(settings.cas.perEye){
-<div class="field">
-    <div class="title">
-        <span>Strength Left</span>
-        <app-field-tip info="Sharpening strength for the left eye only, 0 to 1." />
-    </div>
-    <div class="control">
-        <input matInput [(ngModel)]="settings.cas.strengthLeft" step="0.05" (ngModelChange)="save()" type="number">
-        <mat-slider max="1" min="0" step="0.05">
-            <input matSliderThumb [(ngModel)]="settings.cas.strengthLeft" (ngModelChange)="save()">
-        </mat-slider>
-    </div>
-</div>
-<div class="field">
-    <div class="title">
-        <span>Strength Right</span>
-        <app-field-tip info="Sharpening strength for the right eye only, 0 to 1." />
-    </div>
-    <div class="control">
-        <input matInput [(ngModel)]="settings.cas.strengthRight" step="0.05" (ngModelChange)="save()" type="number">
-        <mat-slider max="1" min="0" step="0.05">
-            <input matSliderThumb [(ngModel)]="settings.cas.strengthRight" (ngModelChange)="save()">
-        </mat-slider>
-    </div>
-</div>
-}
-}
-<div class="field">
-    <div class="title">
-        <span>Post-Pack Processing (packed frame)</span>
-        <app-field-tip info="Runs on the frame the encoder actually reads: the four stacked tiles of the transport image (per eye a 1:1 gaze cut-out and the whole view downscaled), 9 MP instead of the 109 MP eye textures. Sharpening the periphery here happens AFTER its downscale, where it survives; the fovea tile keeps its own strength. Requires the NVENC Tap. Log: 'NvencPostPack: packed frame ...' and a 'last 10s' pass-time line. Any failure disables it for the session with a log line and the encoder sees the untouched frame." />
-    </div>
-    <div class="control">
-        <mat-slide-toggle [(ngModel)]="settings.postPack.enable" (ngModelChange)="save()"></mat-slide-toggle>
-    </div>
-</div>
-@if(settings.postPack.enable){
-<div class="field">
-    <div class="title">
-        <span>Post-Pack CAS</span>
-        <app-field-tip info="Contrast adaptive sharpening on the packed luma plane, per tile. Turn the pre-encode CAS above off when using this; sharpening twice costs bits for nothing." />
-    </div>
-    <div class="control">
-        <mat-slide-toggle [(ngModel)]="settings.postPack.casEnable" (ngModelChange)="save()"></mat-slide-toggle>
-    </div>
-</div>
-@if(settings.postPack.casEnable){
+@if(casMode === 'postpack'){
 <div class="field">
     <div class="title">
         <span>Fovea Strength</span>
@@ -922,15 +895,56 @@
     </div>
 </div>
 }
+@if(casMode === 'preencode'){
 <div class="field">
     <div class="title">
-        <span>Limited Range Remap (black floor probe)</span>
-        <app-field-tip info="The streamer produces full-range video; the headset handles full-range imperfectly (black floor). This remaps luma to 16-235 and chroma to 16-240 on the packed frame and clears the stream's full-range flag, so the decoder expands it back on its standard path. With 10-bit the precision cost is nil. Compare a dark gradient with it on and off; turn the Black Floor shadow lift off while testing." />
+        <span>Per Eye Strength</span>
+        <app-field-tip info="Sharpen each eye independently. Useful when one eye sits slightly off its lens axis (facial asymmetry) and only that eye needs extra sharpening to mask the mild off-axis blur; the other eye is spared the over-sharpening." />
     </div>
     <div class="control">
-        <mat-slide-toggle [(ngModel)]="settings.postPack.limitedRange" (ngModelChange)="save()"></mat-slide-toggle>
+        <mat-slide-toggle [(ngModel)]="settings.cas.perEye" (ngModelChange)="save()"></mat-slide-toggle>
     </div>
 </div>
+@if(!settings.cas.perEye){
+<div class="field">
+    <div class="title">
+        <span>CAS Strength</span>
+        <app-field-tip info="Strength of the sharpening from 0 to 1." />
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="settings.cas.strength" step="0.05" (ngModelChange)="save()" type="number">
+        <mat-slider max="1" min="0" step="0.05">
+            <input matSliderThumb [(ngModel)]="settings.cas.strength" (ngModelChange)="save()">
+        </mat-slider>
+    </div>
+</div>
+}
+@if(settings.cas.perEye){
+<div class="field">
+    <div class="title">
+        <span>Strength Left</span>
+        <app-field-tip info="Sharpening strength for the left eye only, 0 to 1." />
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="settings.cas.strengthLeft" step="0.05" (ngModelChange)="save()" type="number">
+        <mat-slider max="1" min="0" step="0.05">
+            <input matSliderThumb [(ngModel)]="settings.cas.strengthLeft" (ngModelChange)="save()">
+        </mat-slider>
+    </div>
+</div>
+<div class="field">
+    <div class="title">
+        <span>Strength Right</span>
+        <app-field-tip info="Sharpening strength for the right eye only, 0 to 1." />
+    </div>
+    <div class="control">
+        <input matInput [(ngModel)]="settings.cas.strengthRight" step="0.05" (ngModelChange)="save()" type="number">
+        <mat-slider max="1" min="0" step="0.05">
+            <input matSliderThumb [(ngModel)]="settings.cas.strengthRight" (ngModelChange)="save()">
+        </mat-slider>
+    </div>
+</div>
+}
 }
 
 <div class="field">

@@ -29,7 +29,7 @@ function defaultStreamFrame(): StreamFrameConfig {
     colorMultiplier: { r: 1, g: 1, b: 1 },
     srgbMatrix: [],
     cas: { enable: false, strength: 0.5, perEye: false, strengthLeft: 0.5, strengthRight: 0.5 },
-    postPack: { enable: false, casEnable: true, foveaStrength: 0.6, peripheryStrength: 0.3, foveaTop: true, edgeFalloff: 0.12, limitedRange: false },
+    postPack: { enable: true, casEnable: true, foveaStrength: 0.6, peripheryStrength: 0.3, foveaTop: true, edgeFalloff: 0.12, limitedRange: true },
     dither: false,
     stationaryDimming: { enable: false, movementThreshold: 0.4, movementTime: 15, dimSeconds: 10, brightenSeconds: 1 },
     k1: 0,
@@ -56,7 +56,10 @@ function defaultStreamFrame(): StreamFrameConfig {
     zeroCopyV3: false,
     nvencTap: true,
     nvencBandwidthOverrideMbit: 0,
-    nvencSettingsVersion: 3,
+    // 0 on purpose: the settings service omits values equal to their default
+    // when saving, so the real stamp (4) must differ from the default or it is
+    // dropped from the file and the driver re-migrates on every start.
+    nvencSettingsVersion: 0,
     nvencFixLevel: true,
     nvencBitrateMbit: 0,
     nvencMaxQp: 0,
@@ -77,6 +80,8 @@ function defaultStreamFrame(): StreamFrameConfig {
     nvencVuiPrimaries: -1,
     nvencVuiTransfer: -1,
     nvencSplitMode: 1,
+    nvencQpFovea: 0,
+    nvencQpPeriphery: 0,
     nvencVerbose: false,
     fxaa: 'off',
     hitchDiag: true,
@@ -342,8 +347,23 @@ export class StreamFrameComponent {
           const g = this.rootSetting.galaxyXr as any;
           if (g) {
             if (g.customStreamFormatWidth === undefined || g.customStreamFormatWidth > 2048 || g.customStreamFormatWidth < 512) { g.customStreamFormatWidth = 1536; }
-            g.force10bit = false; g.profileSupports10bit = false; g.vrlinkHeadsetProfile = true;
+            g.force10bit = false; g.vrlinkHeadsetProfile = true;
           }
+          queueMicrotask(() => this.save());
+        }
+        // v4 (2026-09-05): post-pack CAS replaces the pre-encode CAS when the
+        // NVENC tap is on. an enabled pre-encode CAS carries its strength to
+        // the fovea and switches off.
+        if (rawSf && (rawSf.nvencSettingsVersion ?? 0) < 4) {
+          if (!rawSf.postPack) { rawSf.postPack = { enable: false, casEnable: true, foveaStrength: 0.6, peripheryStrength: 0.3, foveaTop: true, edgeFalloff: 0.12, limitedRange: false }; }
+          if (rawSf.cas && rawSf.cas.enable && (rawSf.nvencTap ?? true)) {
+            rawSf.postPack.enable = true; rawSf.postPack.casEnable = true;
+            rawSf.postPack.foveaStrength = Math.max(0.6, Math.min(1, rawSf.cas.strength ?? 0.6));
+            rawSf.cas.enable = false;
+          } else if (rawSf.nvencTap ?? true) {
+            rawSf.postPack.enable = true; rawSf.postPack.casEnable = true;
+          }
+          rawSf.nvencSettingsVersion = 4;
           queueMicrotask(() => this.save());
         }
         // kalmanAngularOutFrame is an int in the driver (0 world / 1 body /
@@ -468,6 +488,12 @@ export class StreamFrameComponent {
       if (this.rootSetting.galaxyXr.streamQuality === undefined) {
         this.rootSetting.galaxyXr.streamQuality = 'balanced';
       }
+      if (this.rootSetting.galaxyXr.synthesizeGripTouch === undefined) {
+        this.rootSetting.galaxyXr.synthesizeGripTouch = true;
+      }
+      if (this.rootSetting.galaxyXr.gripTouchThreshold === undefined) {
+        this.rootSetting.galaxyXr.gripTouchThreshold = 0.03;
+      }
       // v3 tier names: legacy v1/v2 names map onto the closest tier
       {
         const q = this.rootSetting.galaxyXr.streamQuality;
@@ -550,7 +576,7 @@ export class StreamFrameComponent {
         this.rootSetting.galaxyXr.profileMaxStreamFormatWidth = 3200;
       }
       if (this.rootSetting.galaxyXr.profileSupports10bit === undefined) {
-        this.rootSetting.galaxyXr.profileSupports10bit = false;
+        this.rootSetting.galaxyXr.profileSupports10bit = true;
       }
       if (this.rootSetting.galaxyXr.force10bit === undefined) {
         this.rootSetting.galaxyXr.force10bit = false;
@@ -609,6 +635,25 @@ export class StreamFrameComponent {
     this.settings.eyeGaze.tanHalfFovX = this.defaults.eyeGaze.tanHalfFovX;
     this.settings.eyeGaze.tanHalfFovY = this.defaults.eyeGaze.tanHalfFovY;
     this.save();
+  }
+
+  // CAS mode: one control over the two sharpening paths. post-pack = the
+  // encoder-side pass (needs the NVENC tap); pre-encode = the legacy
+  // full-resolution pass. never both.
+  get casMode(): 'off' | 'postpack' | 'preencode' {
+    const s = this.settings;
+    if (!s) return 'off';
+    if (s.postPack && s.postPack.enable && s.postPack.casEnable) return 'postpack';
+    if (s.cas && s.cas.enable) return 'preencode';
+    return 'off';
+  }
+  set casMode(m: 'off' | 'postpack' | 'preencode') {
+    const s = this.settings;
+    if (!s) return;
+    if (!s.postPack) { s.postPack = { enable: false, casEnable: true, foveaStrength: 0.6, peripheryStrength: 0.3, foveaTop: true, edgeFalloff: 0.12, limitedRange: false }; }
+    if (m === 'postpack') { s.postPack.enable = true; s.postPack.casEnable = true; s.cas.enable = false; }
+    else if (m === 'preencode') { s.postPack.casEnable = false; s.postPack.enable = s.postPack.limitedRange; s.cas.enable = true; }
+    else { s.postPack.casEnable = false; s.postPack.enable = s.postPack.limitedRange; s.cas.enable = false; }
   }
 
   reset(key: keyof StreamFrameConfig) {

@@ -458,11 +458,44 @@ void CustomHeadsetDeviceProvider::OnScalarComponentCreated(vr::PropertyContainer
 	DriverLog("InputTap: scalar component container=%llu path=%s handle=%llu%s",
 		(unsigned long long)container, name, (unsigned long long)handle,
 		info.interesting ? " [watched]" : "");
+	// grip capacitive touch: vrlink never creates /input/grip/touch for these
+	// controllers; synthesize it next to grip/value (before taking the lock:
+	// the create call re-enters our own hook)
+	bool wantGripTouch = driverConfig.galaxyXr.nativeInputProfile && driverConfig.galaxyXr.synthesizeGripTouch
+		&& lower.size() >= 17 && lower.compare(lower.size() - 17, 17, "/input/grip/value") == 0;
+	if(wantGripTouch && vr::VRDriverInput()){
+		vr::VRInputComponentHandle_t touchHandle = vr::k_ulInvalidInputComponentHandle;
+		vr::EVRInputError err = vr::VRDriverInput()->CreateBooleanComponent(container, "/input/grip/touch", &touchHandle);
+		if(err == vr::VRInputError_None && touchHandle != vr::k_ulInvalidInputComponentHandle){
+			info.gripTouchHandle = touchHandle;
+			DriverLog("InputTap: synthesized /input/grip/touch (handle %llu) on container %llu from grip/value", (unsigned long long)touchHandle, (unsigned long long)container);
+		}else{
+			DriverLog("InputTap: could not create /input/grip/touch on container %llu (error %d)", (unsigned long long)container, (int)err);
+		}
+	}
 	std::lock_guard<std::mutex> guard(poseLogLock);
 	inputComponents[handle] = info;
 }
 
 void CustomHeadsetDeviceProvider::OnScalarComponentUpdated(vr::VRInputComponentHandle_t handle, float value){
+	// grip touch from grip value (hysteresis 0.03 / 0.015); updated outside the lock
+	{
+		vr::VRInputComponentHandle_t touchHandle = vr::k_ulInvalidInputComponentHandle;
+		bool newTouched = false, changed = false;
+		{
+			std::lock_guard<std::mutex> guard(poseLogLock);
+			auto found = inputComponents.find(handle);
+			if(found != inputComponents.end() && found->second.gripTouchHandle != vr::k_ulInvalidInputComponentHandle){
+				InputComponentInfo &gi = found->second;
+				float th = (float)driverConfig.galaxyXr.gripTouchThreshold; if(th < 0.005f){ th = 0.005f; } if(th > 0.5f){ th = 0.5f; }
+				newTouched = gi.gripTouched ? (value > th * 0.5f) : (value > th);
+				if(newTouched != gi.gripTouched){ gi.gripTouched = newTouched; changed = true; touchHandle = gi.gripTouchHandle; }
+			}
+		}
+		if(changed && vr::VRDriverInput()){
+			vr::VRDriverInput()->UpdateBooleanComponent(touchHandle, newTouched, 0.0);
+		}
+	}
 	// distortion tuner capture: isolated fields so the tuner never disturbs
 	// the release-forensics / velocity-fix state below, and gated by an
 	// atomic so the hot path costs one relaxed load when the tuner is off

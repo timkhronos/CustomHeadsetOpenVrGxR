@@ -26,6 +26,8 @@ export type Settings = {
 export type GalaxyXrConfig = {
   nativeIdentity: boolean,
   nativeInputProfile?: boolean,
+  synthesizeGripTouch?: boolean,
+  gripTouchThreshold?: number,
   nativeResolution?: boolean,
   streamQuality?: string,
   customEncodeWidth?: number,
@@ -235,6 +237,8 @@ export type StreamFrameConfig = {
   nvencVuiPrimaries: number;
   nvencVuiTransfer: number;
   nvencSplitMode: number;
+  nvencQpFovea: number;
+  nvencQpPeriphery: number;
   nvencVerbose: boolean;
   fxaa: string;
   hitchDiag: boolean;

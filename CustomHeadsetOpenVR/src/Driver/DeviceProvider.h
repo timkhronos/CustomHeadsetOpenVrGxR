@@ -577,6 +577,13 @@ private:
 		bool isScalar = false;
 		float lastScalar = 0;
 		bool scalarPressed = false;
+		// 2026-09-06 grip capacitive touch synthesis: vrlink only creates
+		// /input/grip/value for the Galaxy XR controllers (no grip/touch
+		// boolean), so our profile's grip touch never lit. we create the
+		// boolean on the same container when grip/value appears and drive
+		// it from the value with hysteresis.
+		vr::VRInputComponentHandle_t gripTouchHandle = vr::k_ulInvalidInputComponentHandle;
+		bool gripTouched = false;
 		// distortion tuner control role, classified from the path at create:
 		// 0 none, 1 joystick y (nudge), 2 a (band out), 3 b (band in),
 		// 4 x (eye cycle), 5 y (reset band), 6 grip value (hold to save).

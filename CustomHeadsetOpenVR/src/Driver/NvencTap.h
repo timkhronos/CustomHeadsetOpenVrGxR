@@ -181,6 +181,18 @@ struct NvencTapConfig {
 	// 15 = disable split entirely (probe: proves whether implicit split is
 	// active for P2 by watching engine time in CBR mode).
 	int splitMode = 0;
+	// 2026-09-05 foveated bit allocation (OPTION, off by default). NVENC
+	// takes a signed QP delta per 32x32 block with every frame
+	// (NV_ENC_PIC_PARAMS::qpDeltaMap, rcParams.qpMapMode = DELTA). the
+	// fovea tile gets qpFovea (<= 0), the periphery qpPeriphery (>= 0),
+	// with the same edge ramp as the post-pack CAS; rate control still
+	// hits the CBR budget, so bits move from the stretched periphery into
+	// the 1:1 gaze cut-out. too much makes saccades "pop" (the eye lands
+	// on periphery-quality pixels until the box catches up).
+	int qpFovea = 0;        // -10..0
+	int qpPeriphery = 0;    //   0..10
+	float qpEdgeFalloff = 0.12f; // fraction of the tile for the ramp
+	bool qpFoveaTop = true;
 	// log every reconfigure (not just the first few) and hex-dump structs.
 	bool verbose = false;
 };
@@ -228,6 +240,7 @@ struct NvencTapStats {
 	uint32_t splitState = 0, splitStatus = 0, splitApplied = 0;
 	// 0 = no upgrade attempted, 1 = session opened as 12.1, 2 = rejected
 	uint32_t sessionUpgrade = 0, sessionUpgradeStatus = 0, retagCalls = 0;
+	uint32_t qpMapFrames = 0; // frames submitted with a QP delta map
 	uint32_t numEncoderEngines = 0; // NV_ENC_CAPS_NUM_ENCODER_ENGINES (0 = not queried / unknown)
 	uint32_t presetCfgVerUsed = 0;
 	uint32_t lastAvgBitrate = 0, lastMaxBitrate = 0;
